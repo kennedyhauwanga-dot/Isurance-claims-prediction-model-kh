@@ -305,7 +305,9 @@ if results:
 
 # ---------- Reference table (XGBoost only) ----------
 st.divider()
-st.subheader("Reference Performance (Thesis, 12-Month Horizon)")
+# --- UPDATED SUBHEADER (Removed "(Thesis, 12-Month Horizon)") ---
+st.subheader("Reference Performance")
+
 st.dataframe(pd.DataFrame({
     "Model": ["XGBoost"],
     "Accuracy": [0.7510],
