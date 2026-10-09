@@ -2,6 +2,7 @@
 app.py
 Insurance Claim Risk Prediction - XGBoost prototype
 Three horizon cards (3M / 6M / 12M) fill in after clicking Predict.
+Author: Kennedy N. Hauwanga (Student No. 218208399)
 """
 import os
 import numpy as np
@@ -194,7 +195,16 @@ input_df = pd.DataFrame([{
 
 # ---------- Header ----------
 st.title("Insurance Claim Risk Prediction")
-st.caption("XGBoost prototype - University of Namibia research thesis")
+st.markdown(
+    "<h4 style='color:#4a5568;margin-top:-12px;font-weight:500;'>"
+    "by Kennedy N. Hauwanga"
+    "</h4>",
+    unsafe_allow_html=True,
+)
+st.caption(
+    "XGBoost prototype - University of Namibia research thesis | "
+    "Student No. 218208399"
+)
 
 h1, h2, h3 = st.columns(3)
 h1.metric("Model", "XGBoost")
@@ -230,8 +240,7 @@ if predict_clicked:
         except Exception as e:
             error = (
                 f"Could not load `{path}`: {e}\n\n"
-                "Pin `scikit-learn>=1.6.0` in `requirements.txt`, clear the "
-                "Streamlit Cloud build cache, and redeploy."
+                "Retrain the models with scikit-learn 1.5.0 to match Streamlit Cloud."
             )
             break
         try:
