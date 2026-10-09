@@ -238,10 +238,7 @@ st.caption(
     "Student No. 218208399"
 )
 
-h1, h2, h3 = st.columns(3)
-h1.metric("Model", "XGBoost")
-h2.metric("Horizons", "3 / 6 / 12 months")
-h3.metric("Records Trained", "10,000")
+# NOTE: The metrics row (Model, Horizons, Records Trained) has been removed here.
 
 st.divider()
 
