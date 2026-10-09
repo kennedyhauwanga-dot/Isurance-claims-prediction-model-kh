@@ -1,7 +1,7 @@
 """
 app.py
 Insurance Claim Risk Prediction - XGBoost prototype
-Shows 3 columns (3M / 6M / 12M). Likelihood appears after clicking Predict.
+Three horizon cards (3M / 6M / 12M) fill in after clicking Predict.
 """
 import os
 import numpy as np
@@ -14,7 +14,7 @@ st.set_page_config(
     layout="wide",
 )
 
-# ---------- Model config ----------
+# ---------- Model configuration ----------
 HORIZONS = {
     "3 months":  {"file": "xgb_3M.joblib",  "threshold": 0.30, "color": "#1976d2"},
     "6 months":  {"file": "xgb_6M.joblib",  "threshold": 0.22, "color": "#f57c00"},
@@ -37,7 +37,6 @@ def risk_level(prob):
 
 
 def gauge_html(prob):
-    """Horizontal gauge bar with a marker at the probability."""
     left_pct = min(max(prob * 100, 0), 100)
     return f"""
     <div style="margin-top:14px;">
@@ -57,7 +56,6 @@ def gauge_html(prob):
 def render_card(horizon, cfg, prob=None):
     """Render one horizon card. If prob is None, show placeholder."""
     if prob is None:
-        # Placeholder card (before clicking Predict)
         st.markdown(
             f"""
             <div style="
@@ -66,7 +64,7 @@ def render_card(horizon, cfg, prob=None):
                 border-radius:14px;
                 padding:26px 20px;
                 text-align:center;
-                min-height:230px;
+                min-height:250px;
                 display:flex;
                 flex-direction:column;
                 justify-content:center;
@@ -88,7 +86,6 @@ def render_card(horizon, cfg, prob=None):
         )
         return
 
-    # Populated card
     risk, risk_color = risk_level(prob)
     decision = "Claim Likely" if prob >= cfg["threshold"] else "No Claim"
     decision_color = "#c62828" if prob >= cfg["threshold"] else "#2e7d32"
@@ -233,7 +230,8 @@ if predict_clicked:
         except Exception as e:
             error = (
                 f"Could not load `{path}`: {e}\n\n"
-                "Pin `scikit-learn>=1.6.0` in `requirements.txt` and redeploy."
+                "Pin `scikit-learn>=1.6.0` in `requirements.txt`, clear the "
+                "Streamlit Cloud build cache, and redeploy."
             )
             break
         try:
@@ -245,7 +243,6 @@ if predict_clicked:
 if error:
     st.error(error)
 
-# Always render the three cards side by side
 col1, col2, col3 = st.columns(3)
 with col1:
     render_card("3 months", HORIZONS["3 months"], results.get("3 months"))
@@ -254,7 +251,7 @@ with col2:
 with col3:
     render_card("12 months", HORIZONS["12 months"], results.get("12 months"))
 
-# ---------- Summary table (only after prediction) ----------
+# ---------- Summary table ----------
 if results:
     st.divider()
     st.subheader("Summary")
