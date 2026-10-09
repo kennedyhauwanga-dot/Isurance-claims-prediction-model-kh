@@ -13,6 +13,7 @@ st.set_page_config(
     layout="wide",
 )
 
+# ---------- Constants ----------
 NUMERICAL_COLS = [
     "age", "annual_premium", "deductible", "bonus_malus", "vehicle_value",
     "vehicle_age", "engine_capacity", "vehicle_weight", "years_driving",
@@ -25,14 +26,22 @@ CATEGORICAL_COLS = [
     "usage_type", "policy_type", "payment_frequency", "safety_features",
 ]
 
+# Correct filenames matching your GitHub repo (xgb_3M.joblib, not xgboost_3M.joblib)
 HORIZON_FILES = {
-    "3 months": "xgboost_3M.joblib",
-    "6 months": "xgboost_6M.joblib",
-    "12 months": "xgboost_12M.joblib",
+    "3 months": "xgb_3M.joblib",
+    "6 months": "xgb_6M.joblib",
+    "12 months": "xgb_12M.joblib",
 }
-DEFAULT_THRESHOLDS = {"3 months": 0.30, "6 months": 0.22, "12 months": 0.12}
+
+# Default thresholds per horizon (from thesis Chapter 6)
+DEFAULT_THRESHOLDS = {
+    "3 months": 0.30,
+    "6 months": 0.22,
+    "12 months": 0.12,
+}
 
 
+# ---------- Helpers ----------
 @st.cache_resource
 def load_model(path):
     return joblib.load(path)
@@ -46,8 +55,13 @@ def risk_label(prob):
     return "High Risk", "#c62828"
 
 
+# ---------- Sidebar ----------
 st.sidebar.title("Configuration")
-horizon_label = st.sidebar.selectbox("Prediction Horizon", list(HORIZON_FILES.keys()), index=2)
+horizon_label = st.sidebar.selectbox(
+    "Prediction Horizon",
+    list(HORIZON_FILES.keys()),
+    index=2,
+)
 
 st.sidebar.divider()
 st.sidebar.header("Policyholder")
@@ -88,6 +102,8 @@ credit_score = st.sidebar.slider("Credit Score", 300, 850, 650)
 mileage = st.sidebar.number_input("Annual Mileage (km)", 1_000, 100_000, 20_000, step=1_000)
 population_density = st.sidebar.number_input("Pop. Density (per km2)", 10, 20_000, 1_000, step=100)
 
+
+# ---------- Build input DataFrame ----------
 input_df = pd.DataFrame([{
     "age": age, "annual_premium": annual_premium, "deductible": deductible,
     "bonus_malus": bonus_malus, "vehicle_value": vehicle_value,
@@ -105,6 +121,8 @@ input_df = pd.DataFrame([{
     "safety_features": safety_features,
 }])
 
+
+# ---------- Main page header ----------
 st.title("Insurance Claim Risk Prediction")
 st.caption("XGBoost prototype - University of Namibia research thesis")
 
@@ -112,54 +130,81 @@ c1, c2, c3 = st.columns(3)
 c1.metric("Model", "XGBoost")
 c2.metric("Horizon", horizon_label)
 c3.metric("Records Trained", "10,000")
+
 st.divider()
 
-model_file = HORIZON_FILES[horizon_label]
+# ---------- Predict button ----------
+st.subheader("Generate Prediction")
+st.write(
+    "Adjust the policyholder details in the sidebar, choose a prediction horizon, "
+    "then click the button below to estimate the probability of a claim."
+)
 
-if not os.path.exists(model_file):
-    st.error(f"Model file `{model_file}` not found in the repository root.")
-    st.info(f"Files present: {sorted(os.listdir('.'))}")
-    st.stop()
+predict_clicked = st.button("Predict Claim Risk", type="primary", use_container_width=True)
 
-try:
-    model = load_model(model_file)
-except Exception as e:
-    st.error(f"Failed to load model: {e}")
-    st.info("Most likely a scikit-learn version mismatch between training and deployment.")
-    st.stop()
+if predict_clicked:
+    model_file = HORIZON_FILES[horizon_label]
 
-try:
-    proba = float(model.predict_proba(input_df)[0, 1])
-except Exception as e:
-    st.error(f"Prediction failed: {e}")
-    st.stop()
+    if not os.path.exists(model_file):
+        st.error(f"Model file `{model_file}` not found in the repository root.")
+        st.info(f"Files present: {sorted(os.listdir('.'))}")
+        st.stop()
 
-threshold = DEFAULT_THRESHOLDS[horizon_label]
-pred = int(proba >= threshold)
-label, color = risk_label(proba)
+    try:
+        with st.spinner("Loading model..."):
+            model = load_model(model_file)
+    except Exception as e:
+        st.error(f"Failed to load model: {e}")
+        st.info("Likely a scikit-learn version mismatch between training and deployment.")
+        st.stop()
 
-r1, r2, r3, r4 = st.columns(4)
-r1.metric("Claim Probability", f"{proba:.2%}")
-r2.metric("Prediction", "Claim" if pred else "No Claim")
-r3.metric("Threshold", f"{threshold:.2f}")
-r4.metric("Risk Level", label)
+    try:
+        with st.spinner("Computing probability..."):
+            proba = float(model.predict_proba(input_df)[0, 1])
+    except Exception as e:
+        st.error(f"Prediction failed: {e}")
+        st.stop()
 
-st.markdown("### Risk Gauge")
-st.markdown(f"""
-<div style="background:#f0f4ff;border-radius:12px;padding:24px;margin-top:8px;">
-  <div style="display:flex;justify-content:space-between;font-weight:600;margin-bottom:8px;font-size:13px;">
-    <span>0%</span><span>30%</span><span>60%</span><span>100%</span>
-  </div>
-  <div style="position:relative;height:26px;background:linear-gradient(to right,#4caf50,#ffc107,#f44336);border-radius:13px;">
-    <div style="position:absolute;left:{min(proba*100,100):.2f}%;top:-8px;transform:translateX(-50%);
-                width:18px;height:42px;background:white;border:3px solid #1a2a4a;border-radius:9px;"></div>
-  </div>
-  <p style="text-align:center;margin-top:16px;font-size:16px;">
-    Predicted claim probability: <b style="color:{color};">{proba:.2%}</b> - {label}
-  </p>
-</div>
-""", unsafe_allow_html=True)
+    threshold = DEFAULT_THRESHOLDS[horizon_label]
+    pred = int(proba >= threshold)
+    label, color = risk_label(proba)
 
+    st.divider()
+    st.subheader(f"Prediction Result ({horizon_label})")
+
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Claim Probability", f"{proba:.2%}")
+    r2.metric("Prediction", "Claim" if pred else "No Claim")
+    r3.metric("Threshold", f"{threshold:.2f}")
+    r4.metric("Risk Level", label)
+
+    st.markdown("### Risk Gauge")
+    st.markdown(f"""
+    <div style="background:#f0f4ff;border-radius:12px;padding:24px;margin-top:8px;">
+      <div style="display:flex;justify-content:space-between;font-weight:600;margin-bottom:8px;font-size:13px;">
+        <span>0%</span><span>30%</span><span>60%</span><span>100%</span>
+      </div>
+      <div style="position:relative;height:26px;background:linear-gradient(to right,#4caf50,#ffc107,#f44336);border-radius:13px;">
+        <div style="position:absolute;left:{min(proba*100,100):.2f}%;top:-8px;transform:translateX(-50%);
+                    width:18px;height:42px;background:white;border:3px solid #1a2a4a;border-radius:9px;"></div>
+      </div>
+      <p style="text-align:center;margin-top:16px;font-size:16px;">
+        Probability of claim within <b>{horizon_label}</b>:
+        <b style="color:{color};">{proba:.2%}</b> - {label}
+      </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.info(
+        f"Based on the current inputs, the model predicts a "
+        f"**{proba:.2%}** chance of the policyholder filing a claim within "
+        f"**{horizon_label}**. The decision threshold for this horizon is "
+        f"**{threshold:.2f}**. Model outputs above this threshold are "
+        f"classified as a likely claim."
+    )
+
+
+# ---------- Always show reference table below ----------
 st.divider()
 st.subheader("Reference Performance (Thesis, 12-Month Horizon)")
 st.dataframe(pd.DataFrame({
