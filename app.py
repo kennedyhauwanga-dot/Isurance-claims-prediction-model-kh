@@ -10,6 +10,22 @@ import pandas as pd
 import streamlit as st
 import joblib
 
+# ============================================================
+# COMPATIBILITY PATCH FOR SCIKIT-LEARN 1.5.0 MODELS
+# ============================================================
+# Streamlit Cloud uses a newer version of scikit-learn, which 
+# removed the _RemainderColsList class. We recreate it here so 
+# the old .joblib files can be loaded without crashing.
+import sklearn
+from sklearn.compose import _column_transformer
+
+if not hasattr(_column_transformer, '_RemainderColsList'):
+    class _RemainderColsList(list):
+        pass
+    _column_transformer._RemainderColsList = _RemainderColsList
+# ============================================================
+
+
 st.set_page_config(
     page_title="Insurance Claim Risk Prediction",
     layout="wide",
