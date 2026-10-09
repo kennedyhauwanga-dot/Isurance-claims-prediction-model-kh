@@ -50,22 +50,6 @@ def risk_level(prob):
         return "Medium Risk", "#f9a825"
     return "High Risk", "#c62828"
 
-def gauge_html(prob):
-    left_pct = min(max(prob * 100, 0), 100)
-    return f"""
-    <div style="margin-top:14px;">
-      <div style="position:relative;height:20px;background:linear-gradient(to right,#4caf50,#ffc107,#f44336);
-                  border-radius:10px;">
-        <div style="position:absolute;left:{left_pct:.2f}%;top:-5px;transform:translateX(-50%);
-                    width:12px;height:30px;background:white;border:3px solid #1a2a4a;
-                    border-radius:6px;"></div>
-      </div>
-      <div style="display:flex;justify-content:space-between;font-size:11px;color:#888;margin-top:4px;">
-        <span>0%</span><span>30%</span><span>60%</span><span>100%</span>
-      </div>
-    </div>
-    """
-
 def render_card(horizon, cfg, prob=None):
     """Render one horizon card. If prob is None, show placeholder."""
     if prob is None:
@@ -102,6 +86,9 @@ def render_card(horizon, cfg, prob=None):
     risk, risk_color = risk_level(prob)
     decision = "Claim Likely" if prob >= cfg["threshold"] else "No Claim"
     decision_color = "#c62828" if prob >= cfg["threshold"] else "#2e7d32"
+    
+    # Calculate gauge position
+    left_pct = min(max(prob * 100, 0), 100)
 
     st.markdown(
         f"""
@@ -133,7 +120,17 @@ def render_card(horizon, cfg, prob=None):
               {decision}
             </span>
           </div>
-          {gauge_html(prob)}
+          <div style="margin-top:14px;">
+            <div style="position:relative;height:20px;background:linear-gradient(to right,#4caf50,#ffc107,#f44336);
+                        border-radius:10px;">
+              <div style="position:absolute;left:{left_pct:.2f}%;top:-5px;transform:translateX(-50%);
+                          width:12px;height:30px;background:white;border:3px solid #1a2a4a;
+                          border-radius:6px;"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:#888;margin-top:4px;">
+              <span>0%</span><span>30%</span><span>60%</span><span>100%</span>
+            </div>
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
