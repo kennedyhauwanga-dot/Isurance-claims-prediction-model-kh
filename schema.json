@@ -1,0 +1,195 @@
+{
+  "numeric_cols": [
+    "age",
+    "policy_duration_years",
+    "premium_amount",
+    "vehicle_age",
+    "vehicle_value",
+    "engine_capacity",
+    "prior_claims",
+    "prior_claim_amount",
+    "years_driving",
+    "annual_mileage",
+    "traffic_violations",
+    "credit_score",
+    "has_telematics",
+    "telematics_score"
+  ],
+  "categorical_cols": [
+    "gender",
+    "marital_status",
+    "employment_status",
+    "income_level",
+    "education_level",
+    "policy_type",
+    "vehicle_type",
+    "vehicle_usage",
+    "region",
+    "urban_rural",
+    "home_ownership",
+    "age_group",
+    "vehicle_age_group"
+  ],
+  "thresholds": {
+    "3M": 0.30000000000000004,
+    "6M": 0.22000000000000003,
+    "12M": 0.12000000000000001
+  },
+  "targets": {
+    "3M": "time_horizon_3m",
+    "6M": "time_horizon_6m",
+    "12M": "time_horizon_1y"
+  },
+  "cat_options": {
+    "gender": [
+      "Female",
+      "Male"
+    ],
+    "marital_status": [
+      "Divorced",
+      "Married",
+      "Single",
+      "Widowed"
+    ],
+    "employment_status": [
+      "Employed",
+      "Retired",
+      "Self-employed",
+      "Unemployed"
+    ],
+    "income_level": [
+      "High",
+      "Low",
+      "Medium"
+    ],
+    "education_level": [
+      "Degree",
+      "Diploma",
+      "Postgraduate",
+      "Secondary"
+    ],
+    "policy_type": [
+      "Comprehensive",
+      "Third Party",
+      "Third Party Fire and Theft"
+    ],
+    "vehicle_type": [
+      "Hatchback",
+      "SUV",
+      "Sedan",
+      "Truck",
+      "Van"
+    ],
+    "vehicle_usage": [
+      "Business",
+      "Mixed",
+      "Private"
+    ],
+    "region": [
+      "Erongo",
+      "Khomas",
+      "Oshana",
+      "Other",
+      "Otjozondjupa"
+    ],
+    "urban_rural": [
+      "Rural",
+      "Urban"
+    ],
+    "home_ownership": [
+      "Other",
+      "Own",
+      "Rent"
+    ],
+    "age_group": [
+      "21-30",
+      "31-40",
+      "41-50",
+      "51-60",
+      "61+"
+    ],
+    "vehicle_age_group": [
+      "0-3",
+      "13+",
+      "4-7",
+      "8-12"
+    ]
+  },
+  "num_ranges": {
+    "age": {
+      "min": 21.0,
+      "max": 75.0,
+      "median": 48.0
+    },
+    "policy_duration_years": {
+      "min": 1.0,
+      "max": 10.0,
+      "median": 6.0
+    },
+    "premium_amount": {
+      "min": 2500.0,
+      "max": 19971.2837920935,
+      "median": 8987.376557931404
+    },
+    "vehicle_age": {
+      "min": 0.0,
+      "max": 15.0,
+      "median": 7.0
+    },
+    "vehicle_value": {
+      "min": 30000.0,
+      "max": 500000.0,
+      "median": 219567.3
+    },
+    "engine_capacity": {
+      "min": 1001.0,
+      "max": 4499.0,
+      "median": 2757.0
+    },
+    "prior_claims": {
+      "min": 0.0,
+      "max": 4.0,
+      "median": 0.0
+    },
+    "prior_claim_amount": {
+      "min": 0.0,
+      "max": 55697.44,
+      "median": 0.0
+    },
+    "years_driving": {
+      "min": 3.0,
+      "max": 57.0,
+      "median": 30.0
+    },
+    "annual_mileage": {
+      "min": 3000.0,
+      "max": 34229.0,
+      "median": 15073.0
+    },
+    "traffic_violations": {
+      "min": 0.0,
+      "max": 5.0,
+      "median": 0.0
+    },
+    "credit_score": {
+      "min": 374.0,
+      "max": 850.0,
+      "median": 651.0
+    },
+    "has_telematics": {
+      "min": 0.0,
+      "max": 1.0,
+      "median": 1.0
+    },
+    "telematics_score": {
+      "min": 20.0,
+      "max": 100.0,
+      "median": 69.88
+    }
+  },
+  "horizons_order": [
+    "3M",
+    "6M",
+    "12M"
+  ]
+}
