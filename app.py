@@ -274,7 +274,7 @@ if results:
         ],
         "Threshold": [f"{HORIZONS[h]['threshold']:.2f}" for h in results],
     })
-    st.dataframe(summary, use_container_width=True, hide_index=True)
+    st.dataframe(summary, use_container_width=True, hide_index=True, on_select="ignore")
 
 
 # ---------- Reference table ----------
@@ -288,7 +288,7 @@ st.dataframe(pd.DataFrame({
     "F1": [0.8600, 0.8558, 0.8562],
     "AUC-ROC": [0.6776, 0.6655, 0.6691],
     "AUC-PR": [0.8585, 0.8512, 0.8509],
-}), use_container_width=True, hide_index=True)
+}), use_container_width=True, hide_index=True, on_select="ignore")
 
 st.divider()
 st.caption(
