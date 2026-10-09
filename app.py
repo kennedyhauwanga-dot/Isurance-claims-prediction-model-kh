@@ -15,11 +15,15 @@ import joblib
 # ============================================================
 import sklearn
 from sklearn.compose import _column_transformer
+from sklearn.impute import SimpleImputer
 
 if not hasattr(_column_transformer, '_RemainderColsList'):
     class _RemainderColsList(list):
         pass
     _column_transformer._RemainderColsList = _RemainderColsList
+
+if not hasattr(SimpleImputer, '_fill_dtype'):
+    SimpleImputer._fill_dtype = property(lambda self: np.dtype('float64'))
 # ============================================================
 
 st.set_page_config(
@@ -130,9 +134,6 @@ def render_card(horizon, cfg, prob=None):
             </span>
           </div>
           {gauge_html(prob)}
-          <div style="font-size:12px;color:#888;margin-top:12px;">
-            Decision threshold: {cfg['threshold']:.2f}
-          </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -199,7 +200,7 @@ input_df = pd.DataFrame([{
     "income_level": income_level,
     "home_ownership": home_ownership,
     "region": region,
-    "urban_rural": 1 if urban_rural == "Urban" else 0,          # Converted to 1/0
+    "urban_rural": 1 if urban_rural == "Urban" else 0,
     "vehicle_value": vehicle_value,
     "vehicle_age": vehicle_age,
     "vehicle_age_group": vehicle_age_group,
@@ -210,7 +211,7 @@ input_df = pd.DataFrame([{
     "fuel_type": fuel_type,
     "transmission": transmission,
     "vehicle_usage": vehicle_usage,
-    "safety_features": 1 if safety_features == "Yes" else 0,    # Converted to 1/0
+    "safety_features": 1 if safety_features == "Yes" else 0,
     "premium_amount": premium_amount,
     "deductible": deductible,
     "bonus_malus": bonus_malus,
@@ -223,7 +224,7 @@ input_df = pd.DataFrame([{
     "traffic_violations": traffic_violations,
     "credit_score": credit_score,
     "annual_mileage": annual_mileage,
-    "has_telematics": 1 if has_telematics == "Yes" else 0,      # Converted to 1/0
+    "has_telematics": 1 if has_telematics == "Yes" else 0,
     "telematics_score": telematics_score,
 }])
 
