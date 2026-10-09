@@ -233,8 +233,6 @@ st.markdown(
     "</h4>",
     unsafe_allow_html=True,
 )
-
-# --- UPDATED CAPTION (Removed "XGBoost prototype -") ---
 st.caption(
     "University of Namibia research thesis | "
     "Student No. 218208399"
@@ -318,8 +316,4 @@ st.dataframe(pd.DataFrame({
     "AUC-PR": [0.8585],
 }), use_container_width=True, hide_index=True, on_select="ignore")
 
-st.divider()
-st.caption(
-    "Prototype for research thesis - Kennedy N. Hauwanga, "
-    "University of Namibia, BSc Data Science Honours."
-)
+# NOTE: The final footer caption ("Prototype for research thesis...") has been removed here.
