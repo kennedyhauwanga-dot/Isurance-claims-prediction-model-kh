@@ -233,12 +233,12 @@ st.markdown(
     "</h4>",
     unsafe_allow_html=True,
 )
+
+# --- UPDATED CAPTION (Removed "XGBoost prototype -") ---
 st.caption(
-    "XGBoost prototype - University of Namibia research thesis | "
+    "University of Namibia research thesis | "
     "Student No. 218208399"
 )
-
-# NOTE: The metrics row (Model, Horizons, Records Trained) has been removed here.
 
 st.divider()
 
