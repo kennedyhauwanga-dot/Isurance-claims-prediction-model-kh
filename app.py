@@ -143,7 +143,6 @@ st.sidebar.title("Configuration")
 
 st.sidebar.divider()
 st.sidebar.header("Policyholder")
-# Added Income Level, Home Ownership
 age = st.sidebar.slider("Age", 18, 80, 35)
 age_group = st.sidebar.selectbox("Age Group", ["Young", "Adult", "Middle-Aged", "Senior"])
 gender = st.sidebar.selectbox("Gender", ["Male", "Female"])
@@ -189,7 +188,7 @@ annual_mileage = st.sidebar.number_input("Annual Mileage (km)", 1_000, 100_000, 
 has_telematics = st.sidebar.selectbox("Has Telematics", ["Yes", "No"])
 telematics_score = st.sidebar.slider("Telematics Score", 0, 100, 50)
 
-# ---------- Build input DataFrame (EXACT names from the model) ----------
+# ---------- Build input DataFrame (with numerical encoding) ----------
 input_df = pd.DataFrame([{
     "age": age,
     "age_group": age_group,
@@ -200,7 +199,7 @@ input_df = pd.DataFrame([{
     "income_level": income_level,
     "home_ownership": home_ownership,
     "region": region,
-    "urban_rural": urban_rural,
+    "urban_rural": 1 if urban_rural == "Urban" else 0,          # Converted to 1/0
     "vehicle_value": vehicle_value,
     "vehicle_age": vehicle_age,
     "vehicle_age_group": vehicle_age_group,
@@ -211,7 +210,7 @@ input_df = pd.DataFrame([{
     "fuel_type": fuel_type,
     "transmission": transmission,
     "vehicle_usage": vehicle_usage,
-    "safety_features": safety_features,
+    "safety_features": 1 if safety_features == "Yes" else 0,    # Converted to 1/0
     "premium_amount": premium_amount,
     "deductible": deductible,
     "bonus_malus": bonus_malus,
@@ -224,7 +223,7 @@ input_df = pd.DataFrame([{
     "traffic_violations": traffic_violations,
     "credit_score": credit_score,
     "annual_mileage": annual_mileage,
-    "has_telematics": has_telematics,
+    "has_telematics": 1 if has_telematics == "Yes" else 0,      # Converted to 1/0
     "telematics_score": telematics_score,
 }])
 
