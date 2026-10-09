@@ -277,17 +277,17 @@ if results:
     st.dataframe(summary, use_container_width=True, hide_index=True, on_select="ignore")
 
 
-# ---------- Reference table ----------
+# ---------- Reference table (XGBoost only) ----------
 st.divider()
 st.subheader("Reference Performance (Thesis, 12-Month Horizon)")
 st.dataframe(pd.DataFrame({
-    "Model": ["XGBoost", "Random Forest", "Naive Bayes"],
-    "Accuracy": [0.7510, 0.7495, 0.7500],
-    "Precision": [0.7500, 0.7503, 0.7501],
-    "Recall": [1.0000, 0.9960, 0.9973],
-    "F1": [0.8600, 0.8558, 0.8562],
-    "AUC-ROC": [0.6776, 0.6655, 0.6691],
-    "AUC-PR": [0.8585, 0.8512, 0.8509],
+    "Model": ["XGBoost"],
+    "Accuracy": [0.7510],
+    "Precision": [0.7500],
+    "Recall": [1.0000],
+    "F1": [0.8600],
+    "AUC-ROC": [0.6776],
+    "AUC-PR": [0.8585],
 }), use_container_width=True, hide_index=True, on_select="ignore")
 
 st.divider()
