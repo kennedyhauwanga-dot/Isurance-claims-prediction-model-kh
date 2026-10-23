@@ -63,7 +63,7 @@ def init_db():
         )
     ''')
     
-    # Create ModelMetadata table (optional, for storing model info)
+    # Create ModelMetadata table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS ModelMetadata (
             ModelID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -362,21 +362,34 @@ with col2:
 with col3:
     render_card("12 months", HORIZONS["12 months"], results.get("12 months"))
 
-# ---------- Summary table ----------
+# ---------- Summary table (Horizontal Layout) ----------
 if results:
     st.divider()
     st.subheader("Summary")
+    
+    # Transpose the table so Time Horizons are horizontal columns
     summary = pd.DataFrame({
-        "Horizon": list(results.keys()),
-        "Probability": [f"{results[h]:.2%}" for h in results],
-        "Risk Level": [risk_level(results[h])[0] for h in results],
-        "Decision": [
-            "Claim" if results[h] >= HORIZONS[h]["threshold"] else "No Claim"
-            for h in results
+        "3 months": [
+            f"{results.get('3 months', 0):.2%}", 
+            risk_level(results.get('3 months', 0))[0], 
+            "Claim" if results.get('3 months', 0) >= HORIZONS["3 months"]["threshold"] else "No Claim", 
+            f"{HORIZONS['3 months']['threshold']:.2f}"
         ],
-        "Threshold": [f"{HORIZONS[h]['threshold']:.2f}" for h in results],
-    })
-    st.dataframe(summary, use_container_width=True, hide_index=True, on_select="ignore")
+        "6 months": [
+            f"{results.get('6 months', 0):.2%}", 
+            risk_level(results.get('6 months', 0))[0], 
+            "Claim" if results.get('6 months', 0) >= HORIZONS["6 months"]["threshold"] else "No Claim", 
+            f"{HORIZONS['6 months']['threshold']:.2f}"
+        ],
+        "12 months": [
+            f"{results.get('12 months', 0):.2%}", 
+            risk_level(results.get('12 months', 0))[0], 
+            "Claim" if results.get('12 months', 0) >= HORIZONS["12 months"]["threshold"] else "No Claim", 
+            f"{HORIZONS['12 months']['threshold']:.2f}"
+        ]
+    }, index=["Probability", "Risk Level", "Decision", "Threshold"])
+    
+    st.dataframe(summary, use_container_width=True)
     st.success("Prediction results have been successfully logged to the database.")
 
 # ---------- Reference table (XGBoost only) ----------
@@ -408,9 +421,9 @@ if not df_logs.empty:
     st.write(f"Total logged predictions in database: **{len(df_logs)}**")
     st.dataframe(df_logs.head(5), use_container_width=True, hide_index=True)
     
-    # Create the download button
+    # Create the download button for CSV
     st.download_button(
-        label="📥 Download Prediction Logs (CSV)",
+        label="Click here Download Prediction Logs (CSV)",
         data=csv_data,
         file_name=f"prediction_logs_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",
