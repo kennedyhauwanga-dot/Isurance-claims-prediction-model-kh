@@ -115,17 +115,17 @@ def check_credentials():
             st.session_state["authentication_status"] = False
 
     if "authentication_status" not in st.session_state:
-        st.title(" System Login")
+        st.title("System Login")
         st.write("Please enter your credentials to access the Claim Risk Prediction System.")
         
         st.text_input("Username", key="username")
         st.text_input("Password", type="password", key="password", on_change=credentials_entered)
         
         if st.session_state.get("authentication_status") == False:
-            st.error(" Incorrect username or password. Access denied.")
+            st.error("Incorrect username or password. Access denied.")
         return False
     elif not st.session_state["authentication_status"]:
-        st.title(" System Login")
+        st.title("System Login")
         st.write("Please enter your credentials to access the Claim Risk Prediction System.")
         
         st.text_input("Username", key="username")
@@ -151,6 +151,42 @@ def risk_level(prob):
     if prob < 0.60:
         return "Medium Risk", "#f9a825"
     return "High Risk", "#c62828"
+
+def calculate_business_risk_adjustment(age, years_driving, prior_claims, violations, mileage, credit_score):
+    """
+    Adjusts the base ML probability using real-world actuarial logic.
+    Returns a multiplier (e.g., 1.5 for high risk, 0.5 for low risk).
+    """
+    multiplier = 1.0
+    
+    # 1. Age & Experience (Young and inexperienced = higher risk)
+    if age < 25:
+        multiplier += 0.4
+        if years_driving < 3:
+            multiplier += 0.3
+    elif age > 60:
+        multiplier += 0.1
+        
+    # 2. Prior Claims & Violations
+    if prior_claims > 0:
+        multiplier += (0.2 * prior_claims)
+    if violations > 0:
+        multiplier += (0.15 * violations)
+        
+    # 3. Mileage (High mileage = higher risk)
+    if mileage > 30000:
+        multiplier += 0.2
+        
+    # 4. Credit Score (Low credit = higher risk)
+    if credit_score < 550:
+        multiplier += 0.2
+        
+    # 5. Very Experienced, Clean Record (Discount)
+    if years_driving > 10 and prior_claims == 0 and violations == 0:
+        multiplier -= 0.3
+        
+    # Cap the multiplier between 0.2 and 3.0
+    return max(0.2, min(multiplier, 3.0))
 
 def render_card(horizon, cfg, prob=None):
     """Render one horizon card. If prob is None, show placeholder."""
@@ -242,7 +278,7 @@ def render_card(horizon, cfg, prob=None):
 st.sidebar.title("System Menu")
 
 # Logout Button
-if st.sidebar.button("🚪 Logout", use_container_width=True):
+if st.sidebar.button("Logout", use_container_width=True):
     del st.session_state["authentication_status"]
     st.rerun()
 
@@ -364,6 +400,11 @@ results = {}
 error = None
 
 if predict_clicked:
+    # Calculate the business logic risk multiplier once
+    risk_multiplier = calculate_business_risk_adjustment(
+        age, years_driving, prior_claims, traffic_violations, annual_mileage, credit_score
+    )
+
     for horizon, cfg in HORIZONS.items():
         path = cfg["file"]
         if not os.path.exists(path):
@@ -378,11 +419,15 @@ if predict_clicked:
             )
             break
         try:
-            prob = float(model.predict_proba(input_df)[0, 1])
-            results[horizon] = prob
+            # Get base ML probability
+            base_prob = float(model.predict_proba(input_df)[0, 1])
+            
+            # Apply the business logic adjustment and cap at 99.9%
+            adjusted_prob = min(base_prob * risk_multiplier, 0.999)
+            results[horizon] = adjusted_prob
             
             # Database Logging Logic
-            decision = "Claim" if prob >= cfg["threshold"] else "No Claim"
+            decision = "Claim" if adjusted_prob >= cfg["threshold"] else "No Claim"
             log_prediction(
                 age=age, 
                 gender=gender, 
@@ -390,7 +435,7 @@ if predict_clicked:
                 premium=premium_amount, 
                 horizon=horizon, 
                 decision=decision, 
-                prob=prob
+                prob=adjusted_prob
             )
             
         except Exception as e:
