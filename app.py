@@ -11,6 +11,7 @@ import streamlit as st
 import joblib
 import sqlite3
 import datetime
+import io
 
 # ============================================================
 # COMPATIBILITY PATCH FOR SCIKIT-LEARN 1.5.0 MODELS
@@ -96,6 +97,14 @@ def get_all_predictions():
     conn.close()
     return df
 
+def convert_df_to_excel(df):
+    """Convert DataFrame to an Excel file in memory."""
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Predictions')
+    processed_data = output.getvalue()
+    return processed_data
+
 # Initialize the database when the app starts
 init_db()
 
@@ -104,11 +113,9 @@ def check_credentials():
     """Returns `True` if the user has entered correct username and password."""
     
     def credentials_entered():
-        # Check both username and password
         if (st.session_state.get("username") == "khauwanga" and 
             st.session_state.get("password") == "University@4201"):
             st.session_state["authentication_status"] = True
-            # Clear credentials from memory
             if "password" in st.session_state:
                 del st.session_state["password"]
         else:
@@ -117,20 +124,16 @@ def check_credentials():
     if "authentication_status" not in st.session_state:
         st.title("System Login")
         st.write("Please enter your credentials to access the Claim Risk Prediction System.")
-        
         st.text_input("Username", key="username")
         st.text_input("Password", type="password", key="password", on_change=credentials_entered)
-        
         if st.session_state.get("authentication_status") == False:
             st.error("Incorrect username or password. Access denied.")
         return False
     elif not st.session_state["authentication_status"]:
         st.title("System Login")
         st.write("Please enter your credentials to access the Claim Risk Prediction System.")
-        
         st.text_input("Username", key="username")
         st.text_input("Password", type="password", key="password", on_change=credentials_entered)
-        
         st.error("Incorrect username or password. Access denied.")
         return False
     else:
@@ -152,14 +155,16 @@ def risk_level(prob):
         return "Medium Risk", "#f9a825"
     return "High Risk", "#c62828"
 
-def calculate_business_risk_adjustment(age, years_driving, prior_claims, violations, mileage, credit_score):
+def calculate_business_risk_adjustment(age, gender, years_driving, prior_claims, violations, 
+                                       mileage, credit_score, urban_rural, vehicle_age, 
+                                       vehicle_value, vehicle_type):
     """
     Adjusts the base ML probability using real-world actuarial logic.
     Returns a multiplier (e.g., 1.5 for high risk, 0.5 for low risk).
     """
     multiplier = 1.0
     
-    # 1. Age & Experience (Young and inexperienced = higher risk)
+    # 1. Age & Experience
     if age < 25:
         multiplier += 0.4
         if years_driving < 3:
@@ -167,21 +172,37 @@ def calculate_business_risk_adjustment(age, years_driving, prior_claims, violati
     elif age > 60:
         multiplier += 0.1
         
-    # 2. Prior Claims & Violations
+    # 2. Gender (Young males carry higher statistical risk)
+    if gender == "Male" and age < 25:
+        multiplier += 0.15
+        
+    # 3. Location (Rural risk)
+    if urban_rural == "Rural":
+        multiplier += 0.1
+        
+    # 4. Prior Claims & Violations
     if prior_claims > 0:
         multiplier += (0.2 * prior_claims)
     if violations > 0:
         multiplier += (0.15 * violations)
         
-    # 3. Mileage (High mileage = higher risk)
+    # 5. Mileage
     if mileage > 30000:
         multiplier += 0.2
         
-    # 4. Credit Score (Low credit = higher risk)
+    # 6. Credit Score
     if credit_score < 550:
         multiplier += 0.2
         
-    # 5. Very Experienced, Clean Record (Discount)
+    # 7. Vehicle specifics (Older cars and high-value cars = higher risk)
+    if vehicle_age > 10:
+        multiplier += 0.15
+    if vehicle_value > 500000:
+        multiplier += 0.1
+    if vehicle_type in ["Pickup", "SUV"]:
+        multiplier += 0.1
+        
+    # 8. Safe Driver Discount
     if years_driving > 10 and prior_claims == 0 and violations == 0:
         multiplier -= 0.3
         
@@ -277,8 +298,8 @@ def render_card(horizon, cfg, prob=None):
 # ---------- Sidebar ----------
 st.sidebar.title("System Menu")
 
-# Logout Button
-if st.sidebar.button("Logout", use_container_width=True):
+# Logout Button (Styled as a prominent primary/red button)
+if st.sidebar.button("⏻ Logout", type="primary", use_container_width=True):
     del st.session_state["authentication_status"]
     st.rerun()
 
@@ -400,9 +421,11 @@ results = {}
 error = None
 
 if predict_clicked:
-    # Calculate the business logic risk multiplier once
     risk_multiplier = calculate_business_risk_adjustment(
-        age, years_driving, prior_claims, traffic_violations, annual_mileage, credit_score
+        age=age, gender=gender, years_driving=years_driving, prior_claims=prior_claims, 
+        violations=traffic_violations, mileage=annual_mileage, credit_score=credit_score,
+        urban_rural=urban_rural, vehicle_age=vehicle_age, vehicle_value=vehicle_value, 
+        vehicle_type=vehicle_type
     )
 
     for horizon, cfg in HORIZONS.items():
@@ -419,25 +442,15 @@ if predict_clicked:
             )
             break
         try:
-            # Get base ML probability
             base_prob = float(model.predict_proba(input_df)[0, 1])
-            
-            # Apply the business logic adjustment and cap at 99.9%
             adjusted_prob = min(base_prob * risk_multiplier, 0.999)
             results[horizon] = adjusted_prob
             
-            # Database Logging Logic
             decision = "Claim" if adjusted_prob >= cfg["threshold"] else "No Claim"
             log_prediction(
-                age=age, 
-                gender=gender, 
-                vehicle_val=vehicle_value, 
-                premium=premium_amount, 
-                horizon=horizon, 
-                decision=decision, 
-                prob=adjusted_prob
+                age=age, gender=gender, vehicle_val=vehicle_value, premium=premium_amount, 
+                horizon=horizon, decision=decision, prob=adjusted_prob
             )
-            
         except Exception as e:
             error = f"Prediction failed for `{path}`: {e}"
             break
@@ -458,7 +471,6 @@ if results:
     st.divider()
     st.subheader("Summary")
     
-    # Transpose the table so Time Horizons are horizontal columns
     summary = pd.DataFrame({
         "3 months": [
             f"{results.get('3 months', 0):.2%}", 
@@ -497,27 +509,25 @@ st.dataframe(pd.DataFrame({
     "AUC-PR": [0.8585],
 }), use_container_width=True, hide_index=True, on_select="ignore")
 
-# ---------- Admin: Download Database ----------
+# ---------- Admin: Download Database (Excel) ----------
 st.divider()
 st.subheader("System Administration (Database Logs)")
 
-# Fetch the data
 df_logs = get_all_predictions()
 
 if not df_logs.empty:
-    # Convert DataFrame to CSV format
-    csv_data = df_logs.to_csv(index=False).encode('utf-8')
+    # Convert DataFrame to Excel format
+    excel_data = convert_df_to_excel(df_logs)
     
-    # Display a small preview for the user
     st.write(f"Total logged predictions in database: **{len(df_logs)}**")
     st.dataframe(df_logs.head(5), use_container_width=True, hide_index=True)
     
-    # Create the download button for CSV
+    # Download Button for Excel
     st.download_button(
-        label="Click here to Download Prediction Logs (CSV)",
-        data=csv_data,
-        file_name=f"prediction_logs_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        mime="text/csv",
+        label="Click here to Download Prediction Logs (Excel)",
+        data=excel_data,
+        file_name=f"prediction_logs_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary"
     )
 else:
