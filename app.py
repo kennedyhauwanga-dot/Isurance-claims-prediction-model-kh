@@ -423,7 +423,7 @@ if not df_logs.empty:
     
     # Create the download button for CSV
     st.download_button(
-        label="Click here Download Prediction Logs (CSV)",
+        label="Click here to Download Prediction Logs (CSV)",
         data=csv_data,
         file_name=f"prediction_logs_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",
