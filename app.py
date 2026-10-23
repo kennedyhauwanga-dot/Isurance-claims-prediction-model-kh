@@ -109,22 +109,23 @@ def check_credentials():
             st.session_state.get("password") == "University@4201"):
             st.session_state["authentication_status"] = True
             # Clear credentials from memory
-            del st.session_state["password"]
+            if "password" in st.session_state:
+                del st.session_state["password"]
         else:
             st.session_state["authentication_status"] = False
 
     if "authentication_status" not in st.session_state:
-        st.title("System Login")
+        st.title(" System Login")
         st.write("Please enter your credentials to access the Claim Risk Prediction System.")
         
         st.text_input("Username", key="username")
         st.text_input("Password", type="password", key="password", on_change=credentials_entered)
         
         if st.session_state.get("authentication_status") == False:
-            st.error("Incorrect username or password. Access denied.")
+            st.error(" Incorrect username or password. Access denied.")
         return False
     elif not st.session_state["authentication_status"]:
-        st.title("System Login")
+        st.title(" System Login")
         st.write("Please enter your credentials to access the Claim Risk Prediction System.")
         
         st.text_input("Username", key="username")
@@ -239,7 +240,9 @@ def render_card(horizon, cfg, prob=None):
 
 # ---------- Sidebar ----------
 st.sidebar.title("System Menu")
-if st.sidebar.button("Logout"):
+
+# Logout Button
+if st.sidebar.button("🚪 Logout", use_container_width=True):
     del st.session_state["authentication_status"]
     st.rerun()
 
