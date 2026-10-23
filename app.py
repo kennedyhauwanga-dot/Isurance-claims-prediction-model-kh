@@ -89,6 +89,13 @@ def log_prediction(age, gender, vehicle_val, premium, horizon, decision, prob):
     conn.commit()
     conn.close()
 
+def get_all_predictions():
+    """Fetch all prediction logs from the database as a Pandas DataFrame."""
+    conn = sqlite3.connect(DB_FILE)
+    df = pd.read_sql_query("SELECT * FROM Predictions ORDER BY PredictionDate DESC", conn)
+    conn.close()
+    return df
+
 # Initialize the database when the app starts
 init_db()
 
@@ -328,9 +335,7 @@ if predict_clicked:
             prob = float(model.predict_proba(input_df)[0, 1])
             results[horizon] = prob
             
-            # ----------------------------------------------------
-            # DATABASE LOGGING LOGIC ADDED HERE
-            # ----------------------------------------------------
+            # Database Logging Logic
             decision = "Claim" if prob >= cfg["threshold"] else "No Claim"
             log_prediction(
                 age=age, 
@@ -341,7 +346,6 @@ if predict_clicked:
                 decision=decision, 
                 prob=prob
             )
-            # ----------------------------------------------------
             
         except Exception as e:
             error = f"Prediction failed for `{path}`: {e}"
@@ -373,7 +377,7 @@ if results:
         "Threshold": [f"{HORIZONS[h]['threshold']:.2f}" for h in results],
     })
     st.dataframe(summary, use_container_width=True, hide_index=True, on_select="ignore")
-    st.success("Prediction results have been logged to the database (`predictions.db`).")
+    st.success("Prediction results have been successfully logged to the database.")
 
 # ---------- Reference table (XGBoost only) ----------
 st.divider()
@@ -388,3 +392,29 @@ st.dataframe(pd.DataFrame({
     "AUC-ROC": [0.6776],
     "AUC-PR": [0.8585],
 }), use_container_width=True, hide_index=True, on_select="ignore")
+
+# ---------- Admin: Download Database ----------
+st.divider()
+st.subheader("System Administration (Database Logs)")
+
+# Fetch the data
+df_logs = get_all_predictions()
+
+if not df_logs.empty:
+    # Convert DataFrame to CSV format
+    csv_data = df_logs.to_csv(index=False).encode('utf-8')
+    
+    # Display a small preview for the user
+    st.write(f"Total logged predictions in database: **{len(df_logs)}**")
+    st.dataframe(df_logs.head(5), use_container_width=True, hide_index=True)
+    
+    # Create the download button
+    st.download_button(
+        label="📥 Download Prediction Logs (CSV)",
+        data=csv_data,
+        file_name=f"prediction_logs_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+        type="primary"
+    )
+else:
+    st.info("No predictions have been logged to the database yet. Click 'Predict Claim Risk' to generate data.")
