@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import joblib
+import sqlite3
+import datetime
 
 # ============================================================
 # COMPATIBILITY PATCH FOR SCIKIT-LEARN 1.5.0 MODELS
@@ -37,6 +39,58 @@ HORIZONS = {
     "6 months":  {"file": "xgb_6M.joblib",  "threshold": 0.22, "color": "#f57c00"},
     "12 months": {"file": "xgb_12M.joblib", "threshold": 0.12, "color": "#388e3c"},
 }
+
+# ---------- Database Setup ----------
+DB_FILE = "predictions.db"
+
+def init_db():
+    """Create the SQLite database and tables if they do not exist."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    # Create Predictions table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Predictions (
+            PredictionID INTEGER PRIMARY KEY AUTOINCREMENT,
+            Age INTEGER,
+            Gender TEXT,
+            VehicleValue REAL,
+            AnnualPremium REAL,
+            TimeHorizon TEXT,
+            PredictedClass TEXT,
+            Probability REAL,
+            PredictionDate TIMESTAMP
+        )
+    ''')
+    
+    # Create ModelMetadata table (optional, for storing model info)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ModelMetadata (
+            ModelID INTEGER PRIMARY KEY AUTOINCREMENT,
+            ModelName TEXT,
+            Hyperparameters TEXT,
+            Accuracy REAL,
+            AUC_PR REAL,
+            LogDate TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def log_prediction(age, gender, vehicle_val, premium, horizon, decision, prob):
+    """Insert a new prediction record into the SQLite database."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute('''
+        INSERT INTO Predictions (Age, Gender, VehicleValue, AnnualPremium, TimeHorizon, PredictedClass, Probability, PredictionDate)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (age, gender, vehicle_val, premium, horizon, decision, prob, now))
+    conn.commit()
+    conn.close()
+
+# Initialize the database when the app starts
+init_db()
 
 # ---------- Helpers ----------
 @st.cache_resource(show_spinner=False)
@@ -271,7 +325,24 @@ if predict_clicked:
             )
             break
         try:
-            results[horizon] = float(model.predict_proba(input_df)[0, 1])
+            prob = float(model.predict_proba(input_df)[0, 1])
+            results[horizon] = prob
+            
+            # ----------------------------------------------------
+            # DATABASE LOGGING LOGIC ADDED HERE
+            # ----------------------------------------------------
+            decision = "Claim" if prob >= cfg["threshold"] else "No Claim"
+            log_prediction(
+                age=age, 
+                gender=gender, 
+                vehicle_val=vehicle_value, 
+                premium=premium_amount, 
+                horizon=horizon, 
+                decision=decision, 
+                prob=prob
+            )
+            # ----------------------------------------------------
+            
         except Exception as e:
             error = f"Prediction failed for `{path}`: {e}"
             break
@@ -302,10 +373,10 @@ if results:
         "Threshold": [f"{HORIZONS[h]['threshold']:.2f}" for h in results],
     })
     st.dataframe(summary, use_container_width=True, hide_index=True, on_select="ignore")
+    st.success("Prediction results have been logged to the database (`predictions.db`).")
 
 # ---------- Reference table (XGBoost only) ----------
 st.divider()
-# --- UPDATED SUBHEADER (Removed "(Thesis, 12-Month Horizon)") ---
 st.subheader("Reference Performance")
 
 st.dataframe(pd.DataFrame({
@@ -317,5 +388,3 @@ st.dataframe(pd.DataFrame({
     "AUC-ROC": [0.6776],
     "AUC-PR": [0.8585],
 }), use_container_width=True, hide_index=True, on_select="ignore")
-
-# NOTE: The final footer caption ("Prototype for research thesis...") has been removed here.
