@@ -121,7 +121,7 @@ def check_credentials():
         st.session_state["authentication_status"] = None
 
     if "authentication_status" not in st.session_state or st.session_state["authentication_status"] != True:
-        st.title("System Login only Meant for my Thesis:Kennedy N Hauwanga 218208399")
+        st.title("System Login meant only for my Thesis:Kennedy N Hauwanga ")
          
         st.write("Please enter your credentials to access the Claim Risk Prediction System.")
        
