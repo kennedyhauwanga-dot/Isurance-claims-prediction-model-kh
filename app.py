@@ -99,6 +99,46 @@ def get_all_predictions():
 # Initialize the database when the app starts
 init_db()
 
+# ---------- Security & Authentication ----------
+def check_credentials():
+    """Returns `True` if the user has entered correct username and password."""
+    
+    def credentials_entered():
+        # Check both username and password
+        if (st.session_state.get("username") == "khauwanga" and 
+            st.session_state.get("password") == "University@4201"):
+            st.session_state["authentication_status"] = True
+            # Clear credentials from memory
+            del st.session_state["password"]
+        else:
+            st.session_state["authentication_status"] = False
+
+    if "authentication_status" not in st.session_state:
+        st.title("System Login")
+        st.write("Please enter your credentials to access the Claim Risk Prediction System.")
+        
+        st.text_input("Username", key="username")
+        st.text_input("Password", type="password", key="password", on_change=credentials_entered)
+        
+        if st.session_state.get("authentication_status") == False:
+            st.error("Incorrect username or password. Access denied.")
+        return False
+    elif not st.session_state["authentication_status"]:
+        st.title("System Login")
+        st.write("Please enter your credentials to access the Claim Risk Prediction System.")
+        
+        st.text_input("Username", key="username")
+        st.text_input("Password", type="password", key="password", on_change=credentials_entered)
+        
+        st.error("Incorrect username or password. Access denied.")
+        return False
+    else:
+        return True
+
+# Halt the app if not logged in
+if not check_credentials():
+    st.stop()
+
 # ---------- Helpers ----------
 @st.cache_resource(show_spinner=False)
 def load_model(path):
@@ -198,7 +238,10 @@ def render_card(horizon, cfg, prob=None):
     )
 
 # ---------- Sidebar ----------
-st.sidebar.title("Configuration")
+st.sidebar.title("System Menu")
+if st.sidebar.button("Logout"):
+    del st.session_state["authentication_status"]
+    st.rerun()
 
 st.sidebar.divider()
 st.sidebar.header("Policyholder")
