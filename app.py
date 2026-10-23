@@ -124,27 +124,21 @@ def check_credentials():
         st.title("System Login")
         st.write("Please enter your credentials to access the Claim Risk Prediction System.")
         
-        # Input fields
         st.text_input("Username", key="username")
-        
-        # Pressing 'Enter' in the password field triggers verify_login
         st.text_input("Password", type="password", key="password", on_change=verify_login)
         
-        # Action Buttons
         col1, col2 = st.columns([1, 1])
         with col1:
             st.button("Login", type="primary", on_click=verify_login, use_container_width=True)
         with col2:
             st.button("Clear", on_click=clear_login, use_container_width=True)
         
-        # Error message
         if st.session_state.get("authentication_status") == False:
             st.error("Incorrect username or password. Access denied.")
         return False
     else:
         return True
 
-# Halt the app if not logged in
 if not check_credentials():
     st.stop()
 
@@ -163,42 +157,65 @@ def risk_level(prob):
 def calculate_business_risk_adjustment(age, gender, years_driving, prior_claims, violations, 
                                        mileage, credit_score, urban_rural, vehicle_age, 
                                        vehicle_value, vehicle_type):
+    """
+    Adjusts the base ML probability using real-world actuarial logic.
+    """
     multiplier = 1.0
     
-    if age < 25:
+    # --- 1. Driving Experience ---
+    # High experience = lower risk. Low experience = higher risk.
+    if years_driving < 3:
         multiplier += 0.4
-        if years_driving < 3:
-            multiplier += 0.3
-    elif age > 60:
-        multiplier += 0.1
-        
-    if gender == "Male" and age < 25:
+    elif years_driving < 8:
         multiplier += 0.15
+    elif years_driving > 15:
+        multiplier -= 0.25
+    elif years_driving > 10:
+        multiplier -= 0.1
         
+    # --- 2. Location (Urban vs Rural) ---
+    # Urban areas have higher accident/theft rates due to congestion. Rural gets a discount.
     if urban_rural == "Rural":
+        multiplier -= 0.15
+    else:
         multiplier += 0.1
         
-    if prior_claims > 0:
-        multiplier += (0.2 * prior_claims)
+    # --- 3. Prior Claims (within the last 3 years) ---
+    # Any prior claim drastically increases risk.
+    if prior_claims == 1:
+        multiplier += 0.3
+    elif prior_claims == 2:
+        multiplier += 0.6
+    elif prior_claims >= 3:
+        multiplier += 1.0
+
+    # --- 4. Age ---
+    if age < 25:
+        multiplier += 0.25
+    elif age > 65:
+        multiplier += 0.1
+        
+    # --- 5. Traffic Violations ---
     if violations > 0:
         multiplier += (0.15 * violations)
         
+    # --- 6. Mileage ---
     if mileage > 30000:
         multiplier += 0.2
         
+    # --- 7. Credit Score ---
     if credit_score < 550:
-        multiplier += 0.2
+        multiplier += 0.15
         
+    # --- 8. Vehicle Specifics ---
     if vehicle_age > 10:
         multiplier += 0.15
     if vehicle_value > 500000:
         multiplier += 0.1
     if vehicle_type in ["Pickup", "SUV"]:
-        multiplier += 0.1
+        multiplier += 0.05
         
-    if years_driving > 10 and prior_claims == 0 and violations == 0:
-        multiplier -= 0.3
-        
+    # Cap the multiplier between 0.2 and 3.0
     return max(0.2, min(multiplier, 3.0))
 
 def render_card(horizon, cfg, prob=None):
@@ -353,8 +370,8 @@ policy_duration_years = st.sidebar.slider("Policy Duration (yrs)", 0, 20, 3)
 
 st.sidebar.divider()
 st.sidebar.header("History & Telematics")
-years_driving = st.sidebar.slider("Years Driving", 0, 60, 15)
-prior_claims = st.sidebar.number_input("Prior Claims", 0, 20, 0)
+years_driving = st.sidebar.slider("Years Driving Experience", 0, 60, 15)
+prior_claims = st.sidebar.number_input("Prior Claims (Last 3 Years)", 0, 20, 0)
 prior_claim_amount = st.sidebar.number_input("Prior Claim Amount (NAD)", 0, 500_000, 0, step=1000)
 traffic_violations = st.sidebar.number_input("Traffic Violations", 0, 20, 0)
 credit_score = st.sidebar.slider("Credit Score", 300, 850, 650)
