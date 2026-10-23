@@ -123,7 +123,7 @@ def check_credentials():
     if "authentication_status" not in st.session_state or st.session_state["authentication_status"] != True:
         st.title("System Login")
         st.write("Please enter your credentials to access the Claim Risk Prediction System.")
-        
+        st.write("Only Meant for my Thesis")
         st.text_input("Username", key="username")
         st.text_input("Password", type="password", key="password", on_change=verify_login)
         
@@ -162,7 +162,7 @@ def calculate_business_risk_adjustment(age, gender, years_driving, prior_claims,
     """
     multiplier = 1.0
     
-    # --- 1. Driving Experience ---
+    #  Driving Experience ---
     # High experience = lower risk. Low experience = higher risk.
     if years_driving < 3:
         multiplier += 0.4
@@ -173,14 +173,14 @@ def calculate_business_risk_adjustment(age, gender, years_driving, prior_claims,
     elif years_driving > 10:
         multiplier -= 0.1
         
-    # --- 2. Location (Urban vs Rural) ---
+    # Location (Urban vs Rural) ---
     # Urban areas have higher accident/theft rates due to congestion. Rural gets a discount.
     if urban_rural == "Rural":
         multiplier -= 0.15
     else:
         multiplier += 0.1
         
-    # --- 3. Prior Claims (within the last 3 years) ---
+    # Prior Claims (within the last 3 years) ---
     # Any prior claim drastically increases risk.
     if prior_claims == 1:
         multiplier += 0.3
