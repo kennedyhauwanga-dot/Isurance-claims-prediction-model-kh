@@ -49,7 +49,6 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # Create Predictions table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Predictions (
             PredictionID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,7 +63,6 @@ def init_db():
         )
     ''')
     
-    # Create ModelMetadata table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS ModelMetadata (
             ModelID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,7 +77,6 @@ def init_db():
     conn.close()
 
 def log_prediction(age, gender, vehicle_val, premium, horizon, decision, prob):
-    """Insert a new prediction record into the SQLite database."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -91,28 +88,25 @@ def log_prediction(age, gender, vehicle_val, premium, horizon, decision, prob):
     conn.close()
 
 def get_all_predictions():
-    """Fetch all prediction logs from the database as a Pandas DataFrame."""
     conn = sqlite3.connect(DB_FILE)
     df = pd.read_sql_query("SELECT * FROM Predictions ORDER BY PredictionDate DESC", conn)
     conn.close()
     return df
 
 def convert_df_to_excel(df):
-    """Convert DataFrame to an Excel file in memory."""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Predictions')
     processed_data = output.getvalue()
     return processed_data
 
-# Initialize the database when the app starts
 init_db()
 
 # ---------- Security & Authentication ----------
 def check_credentials():
     """Returns `True` if the user has entered correct username and password."""
     
-    def credentials_entered():
+    def verify_login():
         if (st.session_state.get("username") == "khauwanga" and 
             st.session_state.get("password") == "University@4201"):
             st.session_state["authentication_status"] = True
@@ -121,20 +115,31 @@ def check_credentials():
         else:
             st.session_state["authentication_status"] = False
 
-    if "authentication_status" not in st.session_state:
+    def clear_login():
+        st.session_state["username"] = ""
+        st.session_state["password"] = ""
+        st.session_state["authentication_status"] = None
+
+    if "authentication_status" not in st.session_state or st.session_state["authentication_status"] != True:
         st.title("System Login")
         st.write("Please enter your credentials to access the Claim Risk Prediction System.")
+        
+        # Input fields
         st.text_input("Username", key="username")
-        st.text_input("Password", type="password", key="password", on_change=credentials_entered)
+        
+        # Pressing 'Enter' in the password field triggers verify_login
+        st.text_input("Password", type="password", key="password", on_change=verify_login)
+        
+        # Action Buttons
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            st.button("Login", type="primary", on_click=verify_login, use_container_width=True)
+        with col2:
+            st.button("Clear", on_click=clear_login, use_container_width=True)
+        
+        # Error message
         if st.session_state.get("authentication_status") == False:
             st.error("Incorrect username or password. Access denied.")
-        return False
-    elif not st.session_state["authentication_status"]:
-        st.title("System Login")
-        st.write("Please enter your credentials to access the Claim Risk Prediction System.")
-        st.text_input("Username", key="username")
-        st.text_input("Password", type="password", key="password", on_change=credentials_entered)
-        st.error("Incorrect username or password. Access denied.")
         return False
     else:
         return True
@@ -158,13 +163,8 @@ def risk_level(prob):
 def calculate_business_risk_adjustment(age, gender, years_driving, prior_claims, violations, 
                                        mileage, credit_score, urban_rural, vehicle_age, 
                                        vehicle_value, vehicle_type):
-    """
-    Adjusts the base ML probability using real-world actuarial logic.
-    Returns a multiplier (e.g., 1.5 for high risk, 0.5 for low risk).
-    """
     multiplier = 1.0
     
-    # 1. Age & Experience
     if age < 25:
         multiplier += 0.4
         if years_driving < 3:
@@ -172,29 +172,23 @@ def calculate_business_risk_adjustment(age, gender, years_driving, prior_claims,
     elif age > 60:
         multiplier += 0.1
         
-    # 2. Gender (Young males carry higher statistical risk)
     if gender == "Male" and age < 25:
         multiplier += 0.15
         
-    # 3. Location (Rural risk)
     if urban_rural == "Rural":
         multiplier += 0.1
         
-    # 4. Prior Claims & Violations
     if prior_claims > 0:
         multiplier += (0.2 * prior_claims)
     if violations > 0:
         multiplier += (0.15 * violations)
         
-    # 5. Mileage
     if mileage > 30000:
         multiplier += 0.2
         
-    # 6. Credit Score
     if credit_score < 550:
         multiplier += 0.2
         
-    # 7. Vehicle specifics (Older cars and high-value cars = higher risk)
     if vehicle_age > 10:
         multiplier += 0.15
     if vehicle_value > 500000:
@@ -202,15 +196,12 @@ def calculate_business_risk_adjustment(age, gender, years_driving, prior_claims,
     if vehicle_type in ["Pickup", "SUV"]:
         multiplier += 0.1
         
-    # 8. Safe Driver Discount
     if years_driving > 10 and prior_claims == 0 and violations == 0:
         multiplier -= 0.3
         
-    # Cap the multiplier between 0.2 and 3.0
     return max(0.2, min(multiplier, 3.0))
 
 def render_card(horizon, cfg, prob=None):
-    """Render one horizon card. If prob is None, show placeholder."""
     if prob is None:
         st.markdown(
             f"""
@@ -246,7 +237,6 @@ def render_card(horizon, cfg, prob=None):
     decision = "Claim Likely" if prob >= cfg["threshold"] else "No Claim"
     decision_color = "#c62828" if prob >= cfg["threshold"] else "#2e7d32"
     
-    # Calculate gauge position
     left_pct = min(max(prob * 100, 0), 100)
 
     st.markdown(
@@ -295,18 +285,40 @@ def render_card(horizon, cfg, prob=None):
         unsafe_allow_html=True,
     )
 
+# ---------- Sidebar Callbacks ----------
+def update_age_group():
+    current_age = st.session_state.policyholder_age
+    if current_age < 25:
+        st.session_state.age_grp = "Young"
+    elif current_age < 40:
+        st.session_state.age_grp = "Adult"
+    elif current_age < 60:
+        st.session_state.age_grp = "Middle-Aged"
+    else:
+        st.session_state.age_grp = "Senior"
+
+if 'age_grp' not in st.session_state:
+    st.session_state.age_grp = "Adult" 
+
 # ---------- Sidebar ----------
 st.sidebar.title("System Menu")
 
-# Logout Button (Styled as a prominent primary/red button)
 if st.sidebar.button("⏻ Logout", type="primary", use_container_width=True):
     del st.session_state["authentication_status"]
     st.rerun()
 
 st.sidebar.divider()
 st.sidebar.header("Policyholder")
-age = st.sidebar.slider("Age", 18, 80, 35)
-age_group = st.sidebar.selectbox("Age Group", ["Young", "Adult", "Middle-Aged", "Senior"])
+
+age = st.sidebar.slider("Age", 18, 80, 35, key="policyholder_age", on_change=update_age_group)
+
+age_group = st.sidebar.selectbox(
+    "Age Group (Auto-calculated)", 
+    ["Young", "Adult", "Middle-Aged", "Senior"], 
+    key="age_grp",
+    disabled=True
+)
+
 gender = st.sidebar.selectbox("Gender", ["Male", "Female"])
 marital_status = st.sidebar.selectbox("Marital Status", ["Single", "Married", "Divorced", "Widowed"])
 education_level = st.sidebar.selectbox("Education Level", ["High School", "Bachelor", "Master", "PhD"])
@@ -350,10 +362,10 @@ annual_mileage = st.sidebar.number_input("Annual Mileage (km)", 1_000, 100_000, 
 has_telematics = st.sidebar.selectbox("Has Telematics", ["Yes", "No"])
 telematics_score = st.sidebar.slider("Telematics Score", 0, 100, 50)
 
-# ---------- Build input DataFrame (with numerical encoding) ----------
+# ---------- Build input DataFrame ----------
 input_df = pd.DataFrame([{
     "age": age,
-    "age_group": age_group,
+    "age_group": age_group, 
     "gender": gender,
     "marital_status": marital_status,
     "education_level": education_level,
@@ -516,13 +528,11 @@ st.subheader("System Administration (Database Logs)")
 df_logs = get_all_predictions()
 
 if not df_logs.empty:
-    # Convert DataFrame to Excel format
     excel_data = convert_df_to_excel(df_logs)
     
     st.write(f"Total logged predictions in database: **{len(df_logs)}**")
     st.dataframe(df_logs.head(5), use_container_width=True, hide_index=True)
     
-    # Download Button for Excel
     st.download_button(
         label="Click here to Download Prediction Logs (Excel)",
         data=excel_data,
