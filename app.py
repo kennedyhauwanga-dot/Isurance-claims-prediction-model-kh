@@ -122,8 +122,9 @@ def check_credentials():
 
     if "authentication_status" not in st.session_state or st.session_state["authentication_status"] != True:
         st.title("System Login")
+         st.subtitle("Only Meant for my Thesis:Kennedy N Hauwanga (218208399)")
         st.write("Please enter your credentials to access the Claim Risk Prediction System.")
-        st.write("Only Meant for my Thesis")
+       
         st.text_input("Username", key="username")
         st.text_input("Password", type="password", key="password", on_change=verify_login)
         
@@ -189,25 +190,25 @@ def calculate_business_risk_adjustment(age, gender, years_driving, prior_claims,
     elif prior_claims >= 3:
         multiplier += 1.0
 
-    # --- 4. Age ---
+    # ---  Age ---
     if age < 25:
         multiplier += 0.25
     elif age > 65:
         multiplier += 0.1
         
-    # --- 5. Traffic Violations ---
+    # ---  Traffic Violations ---
     if violations > 0:
         multiplier += (0.15 * violations)
         
-    # --- 6. Mileage ---
+    # ---  Mileage ---
     if mileage > 30000:
         multiplier += 0.2
         
-    # --- 7. Credit Score ---
+    # ---  Credit Score ---
     if credit_score < 550:
         multiplier += 0.15
         
-    # --- 8. Vehicle Specifics ---
+    # ---  Vehicle Specifics ---
     if vehicle_age > 10:
         multiplier += 0.15
     if vehicle_value > 500000:
