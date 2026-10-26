@@ -588,7 +588,7 @@ with tab_bulk:
         st.divider()
 
         # ----- Portfolio totals -----
-        st.subheader("🏛 Portfolio Reserve — Total Amount the Insurer Should Hold")
+        st.subheader("Portfolio Reserve — Total Amount the Insurer Should Hold")
         total_3m = enriched["3M_reserve"].sum()
         total_6m = enriched["6M_reserve"].sum()
         total_12m = enriched["12M_reserve"].sum()
@@ -599,7 +599,7 @@ with tab_bulk:
         m2.metric("Reserve @ 3M", f"NAD {total_3m:,.0f}")
         m3.metric("Reserve @ 6M", f"NAD {total_6m:,.0f}")
         m4.metric("Reserve @ 12M", f"NAD {total_12m:,.0f}")
-        st.metric("💰 Grand Total Reserve (3M + 6M + 12M combined)",
+        st.metric("Grand Total Reserve (3M + 6M + 12M combined)",
                   f"NAD {grand_total:,.2f}")
 
         # ----- Breakdown by horizon -----
