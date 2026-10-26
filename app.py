@@ -2,6 +2,7 @@
 app.py
 Insurance Claim Risk Prediction - XGBoost prototype
 Three horizon cards (3M / 6M / 12M) fill in after clicking Predict.
+Changing ANY risk factor resets the prototype to its initial state.
 Author: Kennedy N. Hauwanga (Student No. 218208399)
 """
 import os
@@ -42,7 +43,6 @@ HORIZONS = {
 }
 
 # ---------- Database Setup ----------
-# Store DB in a writable location so it survives Streamlit Cloud read-only mounts
 DB_FILE = os.path.join(os.path.expanduser("~"), "predictions.db")
 
 
@@ -444,6 +444,22 @@ input_df = pd.DataFrame([{
     "telematics_score": telematics_score,
 }])
 
+# ---------- Detect any risk-factor change and RESET the prototype ----------
+# Build a stable fingerprint from every user-editable field.
+current_fingerprint = hash(tuple(input_df.iloc[0].astype(str).tolist()))
+
+if "input_fingerprint" not in st.session_state:
+    st.session_state["input_fingerprint"] = current_fingerprint
+
+if "last_results" not in st.session_state:
+    st.session_state["last_results"] = {}
+
+# If the user changed ANY risk factor since the last render, wipe results.
+if st.session_state["input_fingerprint"] != current_fingerprint:
+    st.session_state["input_fingerprint"] = current_fingerprint
+    st.session_state["last_results"] = {}
+    st.session_state["reset_notice"] = True
+
 # ---------- Header ----------
 st.title("Insurance Claim Risk Prediction")
 st.markdown(
@@ -459,6 +475,13 @@ st.caption(
 
 st.divider()
 
+# One-shot reset notice
+if st.session_state.pop("reset_notice", False):
+    st.info(
+        "A risk factor was changed — the previous prediction has been cleared. "
+        "Click **Predict Claim Risk** to generate an updated result."
+    )
+
 # ---------- Prediction section ----------
 st.subheader("Generate Prediction")
 st.write(
@@ -468,10 +491,6 @@ st.write(
 )
 
 predict_clicked = st.button("Predict Claim Risk", type="primary", use_container_width=True)
-
-# Persist last results in session state so they survive reruns
-if "last_results" not in st.session_state:
-    st.session_state["last_results"] = {}
 
 if predict_clicked:
     risk_multiplier = calculate_business_risk_adjustment(
