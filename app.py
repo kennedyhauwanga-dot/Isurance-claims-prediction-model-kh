@@ -599,7 +599,7 @@ with tab_bulk:
         m2.metric("Reserve @ 3M", f"NAD {total_3m:,.0f}")
         m3.metric("Reserve @ 6M", f"NAD {total_6m:,.0f}")
         m4.metric("Reserve @ 12M", f"NAD {total_12m:,.0f}")
-        st.metric("Grand Total Reserve (3M + 6M + 12M combined)",
+        st.metric("💰 Grand Total Reserve (3M + 6M + 12M combined)",
                   f"NAD {grand_total:,.2f}")
 
         # ----- Breakdown by horizon -----
@@ -622,7 +622,7 @@ with tab_bulk:
 
         # ----- Per-policy listing -----
         st.divider()
-        st.subheader("Per-Policy Risk and Reserve")
+        st.subheader("📋 Per-Policy Risk and Reserve")
         st.caption("Each row = one policyholder. Columns show risk for 3M, 6M and 12M, "
                    "plus the reserve the company should hold for that policy.")
 
@@ -630,4 +630,75 @@ with tab_bulk:
             "policy_id",
             "3M_probability", "3M_risk_level", "3M_reserve",
             "6M_probability", "6M_risk_level", "6M_reserve",
-            "12M_probability", "12M_
+            "12M_probability", "12M_risk_level", "12M_reserve",
+            "total_reserve",
+        ]
+        show_cols = [c for c in show_cols if c in enriched.columns]
+        view = enriched[show_cols].copy()
+
+        for c in ["3M_probability", "6M_probability", "12M_probability"]:
+            if c in view.columns:
+                view[c] = view[c].map(lambda v: f"{v:.2%}")
+        for c in ["3M_reserve", "6M_reserve", "12M_reserve", "total_reserve"]:
+            if c in view.columns:
+                view[c] = view[c].map(lambda v: f"{v:,.2f}")
+
+        view = view.rename(columns={
+            "policy_id": "Policy",
+            "3M_probability": "3M Prob",
+            "3M_risk_level": "3M Risk",
+            "3M_reserve": "3M Reserve",
+            "6M_probability": "6M Prob",
+            "6M_risk_level": "6M Risk",
+            "6M_reserve": "6M Reserve",
+            "12M_probability": "12M Prob",
+            "12M_risk_level": "12M Risk",
+            "12M_reserve": "12M Reserve",
+            "total_reserve": "Total Reserve",
+        })
+        st.dataframe(view, use_container_width=True, hide_index=True)
+
+        # ----- Downloads -----
+        st.markdown("#### ⬇ Downloads")
+        dc1, dc2 = st.columns(2)
+        with dc1:
+            st.download_button(
+                "Download full results (Excel)",
+                data=convert_df_to_excel(enriched, "Bulk_Predictions"),
+                file_name=f"bulk_predictions_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary", use_container_width=True)
+        with dc2:
+            st.download_button(
+                "Download full results (CSV)",
+                data=enriched.to_csv(index=False).encode("utf-8"),
+                file_name=f"bulk_predictions_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv", use_container_width=True)
+
+        if st.button("Clear Bulk Results"):
+            del st.session_state["bulk_results"]
+            st.rerun()
+
+# ---------- Reference table ----------
+st.divider()
+st.subheader("Reference Performance")
+st.dataframe(pd.DataFrame({
+    "Model": ["XGBoost"], "Accuracy": [0.7510], "Precision": [0.7500],
+    "Recall": [1.0000], "F1": [0.8600],
+    "AUC-ROC": [0.6776], "AUC-PR": [0.8585],
+}), use_container_width=True, hide_index=True)
+
+# ---------- Admin: Logs ----------
+st.divider()
+st.subheader("System Administration (Database Logs)")
+df_logs = get_all_predictions()
+if not df_logs.empty:
+    st.write(f"Total logged predictions in database: **{len(df_logs)}**")
+    st.dataframe(df_logs.head(50), use_container_width=True, hide_index=True)
+    st.download_button("Click here to Download Prediction Logs (Excel)",
+        data=convert_df_to_excel(df_logs),
+        file_name=f"prediction_logs_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary")
+else:
+    st.info("No predictions logged yet. Click **Predict Claim Risk** to generate the first entry.")
