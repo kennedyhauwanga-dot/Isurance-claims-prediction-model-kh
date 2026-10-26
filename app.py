@@ -4,9 +4,8 @@ Insurance Claim Risk Prediction - XGBoost prototype
 Author: Kennedy N. Hauwanga (Student No. 218208399)
 
 Tabs:
-  1. Single Policyholder  - interactive prediction for one policy
-  2. Bulk Policy File     - upload many policies -> per-policy risk (3M/6M/12M)
-                            + per-policy reserve + portfolio reserve
+  1. Single Policyholder
+  2. Bulk Policy File   (upload -> per-policy risk 3M/6M/12M + reserve + portfolio total)
 """
 import os
 import numpy as np
@@ -82,17 +81,23 @@ def log_prediction(age, gender, vehicle_val, premium, horizon, decision, prob):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (age, gender, vehicle_val, premium, horizon, decision, prob, now))
         conn.commit(); conn.close()
+        try:
+            get_all_predictions.clear()
+        except Exception:
+            pass
         return True
     except Exception as e:
         st.warning(f"Could not log prediction: {e}")
         return False
 
 
-def get_all_predictions():
+@st.cache_data(ttl=5, show_spinner=False)
+def get_all_predictions(limit=500):
     try:
         conn = sqlite3.connect(DB_FILE)
         df = pd.read_sql_query(
-            "SELECT * FROM Predictions ORDER BY PredictionDate DESC", conn)
+            f"SELECT * FROM Predictions ORDER BY PredictionDate DESC LIMIT {limit}",
+            conn)
         conn.close()
         return df
     except Exception:
@@ -144,8 +149,24 @@ def check_credentials():
 if not check_credentials():
     st.stop()
 
+# ---------- Warm model cache once (fast first Predict / Bulk) ----------
+@st.cache_resource(show_spinner="Loading prediction models (first run only)...")
+def warm_models():
+    out = {}
+    for h, cfg in HORIZONS.items():
+        if os.path.exists(cfg["file"]):
+            try:
+                out[h] = joblib.load(cfg["file"])
+            except Exception:
+                out[h] = None
+        else:
+            out[h] = None
+    return out
+
+
+MODELS = warm_models()
+
 # ---------- Helpers ----------
-@st.cache_resource(show_spinner=False)
 def load_model(path):
     return joblib.load(path)
 
@@ -179,6 +200,30 @@ def calculate_business_risk_adjustment(age, gender, years_driving, prior_claims,
     if vehicle_value > 500000: m += 0.1
     if vehicle_type in ["Pickup", "SUV"]: m += 0.05
     return max(0.2, min(m, 3.0))
+
+
+def calculate_business_risk_adjustment_vector(df):
+    """Vectorised version for bulk prediction."""
+    m = pd.Series(1.0, index=df.index)
+    yd = df["years_driving"]
+    m += np.where(yd < 3, 0.4,
+         np.where(yd < 8, 0.15,
+         np.where(yd > 15, -0.25,
+         np.where(yd > 10, -0.1, 0.0))))
+    m += np.where(df["urban_rural"] == 1, 0.1, -0.15)
+    pc = df["prior_claims"]
+    m += np.where(pc == 1, 0.3,
+         np.where(pc == 2, 0.6,
+         np.where(pc >= 3, 1.0, 0.0)))
+    age = df["age"]
+    m += np.where(age < 25, 0.25, np.where(age > 65, 0.1, 0.0))
+    m += 0.15 * df["traffic_violations"]
+    m += np.where(df["annual_mileage"] > 30000, 0.2, 0.0)
+    m += np.where(df["credit_score"] < 550, 0.15, 0.0)
+    m += np.where(df["vehicle_age"] > 10, 0.15, 0.0)
+    m += np.where(df["vehicle_value"] > 500000, 0.1, 0.0)
+    m += np.where(df["vehicle_type"].isin(["Pickup", "SUV"]), 0.05, 0.0)
+    return m.clip(0.2, 3.0).values
 
 
 def render_card(horizon, cfg, prob=None):
@@ -242,14 +287,12 @@ def prepare_bulk_input(df):
     missing = [c for c in BULK_REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         return None, f"Missing columns: **{', '.join(missing)}**. Use the template."
-
     for col, mapping in {
         "urban_rural": {"Urban": 1, "Rural": 0},
         "safety_features": {"Yes": 1, "No": 0},
         "has_telematics": {"Yes": 1, "No": 0},
     }.items():
         df[col] = df[col].astype(str).str.strip().str.title().map(mapping).fillna(0).astype(int)
-
     numeric_cols = [
         "age", "vehicle_value", "vehicle_age", "engine_capacity", "vehicle_weight",
         "premium_amount", "deductible", "bonus_malus", "policy_duration_years",
@@ -262,44 +305,28 @@ def prepare_bulk_input(df):
 
 
 def run_bulk_prediction(df, severity_rate, safety_loading):
-    models = {}
+    models = MODELS
     for h, cfg in HORIZONS.items():
-        if not os.path.exists(cfg["file"]):
+        if models.get(h) is None:
             raise FileNotFoundError(f"Model file `{cfg['file']}` not found for {h}.")
-        models[h] = load_model(cfg["file"])
 
     out = df.copy()
-
-    # Business multiplier per row
-    multipliers = []
-    for _, r in df.iterrows():
-        multipliers.append(calculate_business_risk_adjustment(
-            age=r["age"], gender=r["gender"], years_driving=r["years_driving"],
-            prior_claims=r["prior_claims"], violations=r["traffic_violations"],
-            mileage=r["annual_mileage"], credit_score=r["credit_score"],
-            urban_rural="Urban" if int(r["urban_rural"]) == 1 else "Rural",
-            vehicle_age=r["vehicle_age"], vehicle_value=r["vehicle_value"],
-            vehicle_type=r["vehicle_type"],
-        ))
-    multipliers = np.array(multipliers)
-    out["risk_multiplier"] = multipliers
+    out["risk_multiplier"] = calculate_business_risk_adjustment_vector(df)
 
     model_input_cols = [c for c in BULK_REQUIRED_COLUMNS if c != "policy_id"]
+    X = out[model_input_cols]
 
     severity = out["vehicle_value"].astype(float) * severity_rate
 
     for h, cfg in HORIZONS.items():
-        X = out[model_input_cols].copy()
         base = models[h].predict_proba(X)[:, 1]
-        adj = np.minimum(base * multipliers, 0.999)
-
+        adj = np.minimum(base * out["risk_multiplier"].values, 0.999)
         short = cfg["short"]
         out[f"{short}_probability"] = adj
         out[f"{short}_risk_level"] = [risk_level(p)[0] for p in adj]
         out[f"{short}_decision"] = np.where(adj >= cfg["threshold"], "Claim", "No Claim")
         out[f"{short}_reserve"] = (adj * severity * safety_loading).round(2)
 
-    # Total recommended reserve across all three horizons
     out["total_reserve"] = (
         out["3M_reserve"] + out["6M_reserve"] + out["12M_reserve"]
     ).round(2)
@@ -308,7 +335,6 @@ def run_bulk_prediction(df, severity_rate, safety_loading):
 
 
 def portfolio_summary(enriched):
-    """Return a tidy summary DataFrame of the whole book."""
     rows = []
     for h in HORIZONS:
         short = HORIZONS[h]["short"]
@@ -455,12 +481,10 @@ with tab_single:
         )
         new = {}
         for h, cfg in HORIZONS.items():
-            path = cfg["file"]
-            if not os.path.exists(path):
-                st.warning(f"Model file `{path}` not found. Skipping {h}."); continue
+            if MODELS.get(h) is None:
+                st.warning(f"Model file `{cfg['file']}` not found. Skipping {h}."); continue
             try:
-                model = load_model(path)
-                base = float(model.predict_proba(input_df)[0, 1])
+                base = float(MODELS[h].predict_proba(input_df)[0, 1])
                 adj = min(base * rmul, 0.999)
                 new[h] = adj
                 decision = "Claim" if adj >= cfg["threshold"] else "No Claim"
@@ -503,12 +527,7 @@ with tab_single:
 # ============================================================
 with tab_bulk:
     st.subheader("Bulk Policy Risk & Reserve Recommendation")
-    st.write("Upload a CSV or Excel file with multiple policies. The system will "
-             "produce, for **every policyholder**, claim risk for **3M, 6M and 12M**, "
-             "and a recommended **reserve amount** per horizon. It will also compute "
-             "the **total reserve** your company should hold for the whole book.")
 
-    # Template
     template_df = pd.DataFrame([{
         "policy_id": "P0001", "age": 35, "gender": "Male",
         "marital_status": "Married", "education_level": "Bachelor",
@@ -548,10 +567,6 @@ with tab_bulk:
     with cb:
         safety_loading = st.slider("Safety Loading Multiplier",
             min_value=1.00, max_value=2.00, value=1.25, step=0.05)
-    st.caption(
-        f"Per-horizon reserve = `Probability × (Vehicle Value × {severity_rate:.0%}) "
-        f"× {safety_loading:.2f}`. Total reserve = sum of the three horizons."
-    )
 
     run_bulk = st.button("Run Bulk Prediction", type="primary",
                          use_container_width=True, disabled=uploaded is None)
@@ -582,13 +597,11 @@ with tab_bulk:
                 except Exception as e:
                     st.error(f"Bulk prediction failed: {e}")
 
-    # ---- RESULTS ----
     if "bulk_results" in st.session_state:
         enriched = st.session_state["bulk_results"]
         st.divider()
 
-        # ----- Portfolio totals -----
-        st.subheader("Portfolio Reserve — Total Amount the Insurer Should Hold")
+        st.subheader("🏛 Portfolio Reserve — Total Amount the Insurer Should Hold")
         total_3m = enriched["3M_reserve"].sum()
         total_6m = enriched["6M_reserve"].sum()
         total_12m = enriched["12M_reserve"].sum()
@@ -599,14 +612,12 @@ with tab_bulk:
         m2.metric("Reserve @ 3M", f"NAD {total_3m:,.0f}")
         m3.metric("Reserve @ 6M", f"NAD {total_6m:,.0f}")
         m4.metric("Reserve @ 12M", f"NAD {total_12m:,.0f}")
-        st.metric("Grand Total Reserve (3M + 6M + 12M combined)",
+        st.metric("💰 Grand Total Reserve (3M + 6M + 12M combined)",
                   f"NAD {grand_total:,.2f}")
 
-        # ----- Breakdown by horizon -----
         st.markdown("##### Breakdown by Horizon")
         st.dataframe(portfolio_summary(enriched), use_container_width=True, hide_index=True)
 
-        # ----- Breakdown by risk level (12M) -----
         st.markdown("##### Book Composition by Risk Level (12-Month Horizon)")
         comp = (
             enriched.groupby("12M_risk_level")
@@ -617,88 +628,4 @@ with tab_bulk:
                              "policies": "Policies",
                              "total_reserve": "12M Reserve (NAD)"})
         )
-        comp["12M Reserve (NAD)"] = comp["12M Reserve (NAD)"].map(lambda v: f"{v:,.2f}")
-        st.dataframe(comp, use_container_width=True, hide_index=True)
-
-        # ----- Per-policy listing -----
-        st.divider()
-        st.subheader("📋 Per-Policy Risk and Reserve")
-        st.caption("Each row = one policyholder. Columns show risk for 3M, 6M and 12M, "
-                   "plus the reserve the company should hold for that policy.")
-
-        show_cols = [
-            "policy_id",
-            "3M_probability", "3M_risk_level", "3M_reserve",
-            "6M_probability", "6M_risk_level", "6M_reserve",
-            "12M_probability", "12M_risk_level", "12M_reserve",
-            "total_reserve",
-        ]
-        show_cols = [c for c in show_cols if c in enriched.columns]
-        view = enriched[show_cols].copy()
-
-        for c in ["3M_probability", "6M_probability", "12M_probability"]:
-            if c in view.columns:
-                view[c] = view[c].map(lambda v: f"{v:.2%}")
-        for c in ["3M_reserve", "6M_reserve", "12M_reserve", "total_reserve"]:
-            if c in view.columns:
-                view[c] = view[c].map(lambda v: f"{v:,.2f}")
-
-        view = view.rename(columns={
-            "policy_id": "Policy",
-            "3M_probability": "3M Prob",
-            "3M_risk_level": "3M Risk",
-            "3M_reserve": "3M Reserve",
-            "6M_probability": "6M Prob",
-            "6M_risk_level": "6M Risk",
-            "6M_reserve": "6M Reserve",
-            "12M_probability": "12M Prob",
-            "12M_risk_level": "12M Risk",
-            "12M_reserve": "12M Reserve",
-            "total_reserve": "Total Reserve",
-        })
-        st.dataframe(view, use_container_width=True, hide_index=True)
-
-        # ----- Downloads -----
-        st.markdown("#### ⬇ Downloads")
-        dc1, dc2 = st.columns(2)
-        with dc1:
-            st.download_button(
-                "Download full results (Excel)",
-                data=convert_df_to_excel(enriched, "Bulk_Predictions"),
-                file_name=f"bulk_predictions_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary", use_container_width=True)
-        with dc2:
-            st.download_button(
-                "Download full results (CSV)",
-                data=enriched.to_csv(index=False).encode("utf-8"),
-                file_name=f"bulk_predictions_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv", use_container_width=True)
-
-        if st.button("Clear Bulk Results"):
-            del st.session_state["bulk_results"]
-            st.rerun()
-
-# ---------- Reference table ----------
-st.divider()
-st.subheader("Reference Performance")
-st.dataframe(pd.DataFrame({
-    "Model": ["XGBoost"], "Accuracy": [0.7510], "Precision": [0.7500],
-    "Recall": [1.0000], "F1": [0.8600],
-    "AUC-ROC": [0.6776], "AUC-PR": [0.8585],
-}), use_container_width=True, hide_index=True)
-
-# ---------- Admin: Logs ----------
-st.divider()
-st.subheader("System Administration (Database Logs)")
-df_logs = get_all_predictions()
-if not df_logs.empty:
-    st.write(f"Total logged predictions in database: **{len(df_logs)}**")
-    st.dataframe(df_logs.head(50), use_container_width=True, hide_index=True)
-    st.download_button("Click here to Download Prediction Logs (Excel)",
-        data=convert_df_to_excel(df_logs),
-        file_name=f"prediction_logs_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary")
-else:
-    st.info("No predictions logged yet. Click **Predict Claim Risk** to generate the first entry.")
+        comp["12M Reserve (NAD)"] = comp["12M Reserve (NAD)"].map(lambda v: f"{v:
