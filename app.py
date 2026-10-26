@@ -628,4 +628,86 @@ with tab_bulk:
                              "policies": "Policies",
                              "total_reserve": "12M Reserve (NAD)"})
         )
-        comp["12M Reserve (NAD)"] = comp["12M Reserve (NAD)"].map(lambda v: f"{v:
+        comp["12M Reserve (NAD)"] = comp["12M Reserve (NAD)"].map(lambda v: f"{v:,.2f}")
+        st.dataframe(comp, use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.subheader("📋 Per-Policy Risk and Reserve")
+
+        show_cols = [
+            "policy_id",
+            "3M_probability", "3M_risk_level", "3M_reserve",
+            "6M_probability", "6M_risk_level", "6M_reserve",
+            "12M_probability", "12M_risk_level", "12M_reserve",
+            "total_reserve",
+        ]
+        show_cols = [c for c in show_cols if c in enriched.columns]
+        view = enriched[show_cols].copy()
+
+        for c in ["3M_probability", "6M_probability", "12M_probability"]:
+            if c in view.columns:
+                view[c] = view[c].map(lambda v: f"{v:.2%}")
+        for c in ["3M_reserve", "6M_reserve", "12M_reserve", "total_reserve"]:
+            if c in view.columns:
+                view[c] = view[c].map(lambda v: f"{v:,.2f}")
+
+        view = view.rename(columns={
+            "policy_id": "Policy",
+            "3M_probability": "3M Prob", "3M_risk_level": "3M Risk", "3M_reserve": "3M Reserve",
+            "6M_probability": "6M Prob", "6M_risk_level": "6M Risk", "6M_reserve": "6M Reserve",
+            "12M_probability": "12M Prob", "12M_risk_level": "12M Risk", "12M_reserve": "12M Reserve",
+            "total_reserve": "Total Reserve",
+        })
+        st.dataframe(view, use_container_width=True, hide_index=True)
+
+        st.markdown("#### ⬇ Downloads")
+        dc1, dc2 = st.columns(2)
+        with dc1:
+            st.download_button(
+                "Download full results (Excel)",
+                data=convert_df_to_excel(enriched, "Bulk_Predictions"),
+                file_name=f"bulk_predictions_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary", use_container_width=True)
+        with dc2:
+            st.download_button(
+                "Download full results (CSV)",
+                data=enriched.to_csv(index=False).encode("utf-8"),
+                file_name=f"bulk_predictions_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv", use_container_width=True)
+
+        if st.button("Clear Bulk Results"):
+            del st.session_state["bulk_results"]
+            st.rerun()
+
+# ---------- Reference table ----------
+st.divider()
+st.subheader("Reference Performance")
+st.dataframe(pd.DataFrame({
+    "Model": ["XGBoost"], "Accuracy": [0.7510], "Precision": [0.7500],
+    "Recall": [1.0000], "F1": [0.8600],
+    "AUC-ROC": [0.6776], "AUC-PR": [0.8585],
+}), use_container_width=True, hide_index=True)
+
+# ---------- Admin: Logs (paginated) ----------
+st.divider()
+st.subheader("System Administration (Database Logs)")
+df_logs = get_all_predictions()
+if not df_logs.empty:
+    total = len(df_logs)
+    st.write(f"Total logged predictions in database: **{total}**")
+
+    PAGE_SIZE = 50
+    pages = max(1, (total - 1) // PAGE_SIZE + 1)
+    page = st.number_input("Page", min_value=1, max_value=pages, value=1, step=1)
+    start = (page - 1) * PAGE_SIZE
+    st.dataframe(df_logs.iloc[start:start + PAGE_SIZE],
+                 use_container_width=True, hide_index=True)
+
+    st.download_button("Click here to Download Prediction Logs (Excel)",
+        data=convert_df_to_excel(df_logs),
+        file_name=f"prediction_logs_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary")
+else:
+    st.info("No predictions logged yet. Click **Predict Claim Risk** to generate the first entry.")
