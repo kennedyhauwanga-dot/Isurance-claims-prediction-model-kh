@@ -42,73 +42,97 @@ HORIZONS = {
 }
 
 # ---------- Database Setup ----------
-DB_FILE = "predictions.db"
+# Store DB in a writable location so it survives Streamlit Cloud read-only mounts
+DB_FILE = os.path.join(os.path.expanduser("~"), "predictions.db")
+
 
 def init_db():
     """Create the SQLite database and tables if they do not exist."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS Predictions (
-            PredictionID INTEGER PRIMARY KEY AUTOINCREMENT,
-            Age INTEGER,
-            Gender TEXT,
-            VehicleValue REAL,
-            AnnualPremium REAL,
-            TimeHorizon TEXT,
-            PredictedClass TEXT,
-            Probability REAL,
-            PredictionDate TIMESTAMP
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ModelMetadata (
-            ModelID INTEGER PRIMARY KEY AUTOINCREMENT,
-            ModelName TEXT,
-            Hyperparameters TEXT,
-            Accuracy REAL,
-            AUC_PR REAL,
-            LogDate TIMESTAMP
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS Predictions (
+                PredictionID INTEGER PRIMARY KEY AUTOINCREMENT,
+                Age INTEGER,
+                Gender TEXT,
+                VehicleValue REAL,
+                AnnualPremium REAL,
+                TimeHorizon TEXT,
+                PredictedClass TEXT,
+                Probability REAL,
+                PredictionDate TIMESTAMP
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ModelMetadata (
+                ModelID INTEGER PRIMARY KEY AUTOINCREMENT,
+                ModelName TEXT,
+                Hyperparameters TEXT,
+                Accuracy REAL,
+                AUC_PR REAL,
+                LogDate TIMESTAMP
+            )
+        ''')
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        st.error(f"Database initialization failed: {e}")
+        return False
+
 
 def log_prediction(age, gender, vehicle_val, premium, horizon, decision, prob):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cursor.execute('''
-        INSERT INTO Predictions (Age, Gender, VehicleValue, AnnualPremium, TimeHorizon, PredictedClass, Probability, PredictionDate)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (age, gender, vehicle_val, premium, horizon, decision, prob, now))
-    conn.commit()
-    conn.close()
+    """Insert one prediction row. Fails silently so the UI never breaks."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute('''
+            INSERT INTO Predictions
+            (Age, Gender, VehicleValue, AnnualPremium, TimeHorizon,
+             PredictedClass, Probability, PredictionDate)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (age, gender, vehicle_val, premium, horizon, decision, prob, now))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        st.warning(f"Could not log prediction: {e}")
+        return False
+
 
 def get_all_predictions():
-    conn = sqlite3.connect(DB_FILE)
-    df = pd.read_sql_query("SELECT * FROM Predictions ORDER BY PredictionDate DESC", conn)
-    conn.close()
-    return df
+    """Return all logged predictions as a DataFrame. Never raises."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        df = pd.read_sql_query(
+            "SELECT * FROM Predictions ORDER BY PredictionDate DESC", conn
+        )
+        conn.close()
+        return df
+    except Exception:
+        return pd.DataFrame()
+
 
 def convert_df_to_excel(df):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Predictions')
-    processed_data = output.getvalue()
-    return processed_data
+    return output.getvalue()
+
 
 init_db()
 
 # ---------- Security & Authentication ----------
 def check_credentials():
     """Returns `True` if the user has entered correct username and password."""
-    
+
     def verify_login():
-        if (st.session_state.get("username") == "khauwanga" and 
-            st.session_state.get("password") == "University@4201"):
+        if (st.session_state.get("username") == "khauwanga" and
+                st.session_state.get("password") == "University@4201"):
             st.session_state["authentication_status"] = True
             if "password" in st.session_state:
                 del st.session_state["password"]
@@ -120,25 +144,26 @@ def check_credentials():
         st.session_state["password"] = ""
         st.session_state["authentication_status"] = None
 
-    if "authentication_status" not in st.session_state or st.session_state["authentication_status"] != True:
-        st.title("System Login meant only for my Thesis:Kennedy N Hauwanga ")
-         
+    if ("authentication_status" not in st.session_state
+            or st.session_state["authentication_status"] != True):
+        st.title("System Login meant only for my Thesis: Kennedy N Hauwanga")
         st.write("Please enter your credentials to access the Claim Risk Prediction System.")
-       
+
         st.text_input("Username", key="username")
         st.text_input("Password", type="password", key="password", on_change=verify_login)
-        
+
         col1, col2 = st.columns([1, 1])
         with col1:
             st.button("Login", type="primary", on_click=verify_login, use_container_width=True)
         with col2:
             st.button("Clear", on_click=clear_login, use_container_width=True)
-        
+
         if st.session_state.get("authentication_status") == False:
             st.error("Incorrect username or password. Access denied.")
         return False
     else:
         return True
+
 
 if not check_credentials():
     st.stop()
@@ -148,6 +173,7 @@ if not check_credentials():
 def load_model(path):
     return joblib.load(path)
 
+
 def risk_level(prob):
     if prob < 0.30:
         return "Low Risk", "#2e7d32"
@@ -155,16 +181,14 @@ def risk_level(prob):
         return "Medium Risk", "#f9a825"
     return "High Risk", "#c62828"
 
-def calculate_business_risk_adjustment(age, gender, years_driving, prior_claims, violations, 
-                                       mileage, credit_score, urban_rural, vehicle_age, 
+
+def calculate_business_risk_adjustment(age, gender, years_driving, prior_claims, violations,
+                                       mileage, credit_score, urban_rural, vehicle_age,
                                        vehicle_value, vehicle_type):
-    """
-    Adjusts the base ML probability using real-world actuarial logic.
-    """
+    """Adjusts the base ML probability using real-world actuarial logic."""
     multiplier = 1.0
-    
-    #  Driving Experience ---
-    # High experience = lower risk. Low experience = higher risk.
+
+    # Driving Experience
     if years_driving < 3:
         multiplier += 0.4
     elif years_driving < 8:
@@ -173,16 +197,14 @@ def calculate_business_risk_adjustment(age, gender, years_driving, prior_claims,
         multiplier -= 0.25
     elif years_driving > 10:
         multiplier -= 0.1
-        
-    # Location (Urban vs Rural) ---
-    # Urban areas have higher accident/theft rates due to congestion. Rural gets a discount.
+
+    # Location
     if urban_rural == "Rural":
         multiplier -= 0.15
     else:
         multiplier += 0.1
-        
-    # Prior Claims (within the last 3 years) ---
-    # Any prior claim drastically increases risk.
+
+    # Prior claims
     if prior_claims == 1:
         multiplier += 0.3
     elif prior_claims == 2:
@@ -190,34 +212,34 @@ def calculate_business_risk_adjustment(age, gender, years_driving, prior_claims,
     elif prior_claims >= 3:
         multiplier += 1.0
 
-    # ---  Age ---
+    # Age
     if age < 25:
         multiplier += 0.25
     elif age > 65:
         multiplier += 0.1
-        
-    # ---  Traffic Violations ---
+
+    # Violations
     if violations > 0:
         multiplier += (0.15 * violations)
-        
-    # ---  Mileage ---
+
+    # Mileage
     if mileage > 30000:
         multiplier += 0.2
-        
-    # ---  Credit Score ---
+
+    # Credit score
     if credit_score < 550:
         multiplier += 0.15
-        
-    # ---  Vehicle Specifics ---
+
+    # Vehicle specifics
     if vehicle_age > 10:
         multiplier += 0.15
     if vehicle_value > 500000:
         multiplier += 0.1
     if vehicle_type in ["Pickup", "SUV"]:
         multiplier += 0.05
-        
-    # Cap the multiplier between 0.2 and 3.0
+
     return max(0.2, min(multiplier, 3.0))
+
 
 def render_card(horizon, cfg, prob=None):
     if prob is None:
@@ -254,7 +276,6 @@ def render_card(horizon, cfg, prob=None):
     risk, risk_color = risk_level(prob)
     decision = "Claim Likely" if prob >= cfg["threshold"] else "No Claim"
     decision_color = "#c62828" if prob >= cfg["threshold"] else "#2e7d32"
-    
     left_pct = min(max(prob * 100, 0), 100)
 
     st.markdown(
@@ -288,13 +309,15 @@ def render_card(horizon, cfg, prob=None):
             </span>
           </div>
           <div style="margin-top:14px;">
-            <div style="position:relative;height:20px;background:linear-gradient(to right,#4caf50,#ffc107,#f44336);
+            <div style="position:relative;height:20px;
+                        background:linear-gradient(to right,#4caf50,#ffc107,#f44336);
                         border-radius:10px;">
               <div style="position:absolute;left:{left_pct:.2f}%;top:-5px;transform:translateX(-50%);
                           width:12px;height:30px;background:white;border:3px solid #1a2a4a;
                           border-radius:6px;"></div>
             </div>
-            <div style="display:flex;justify-content:space-between;font-size:11px;color:#888;margin-top:4px;">
+            <div style="display:flex;justify-content:space-between;
+                        font-size:11px;color:#888;margin-top:4px;">
               <span>0%</span><span>30%</span><span>60%</span><span>100%</span>
             </div>
           </div>
@@ -302,6 +325,7 @@ def render_card(horizon, cfg, prob=None):
         """,
         unsafe_allow_html=True,
     )
+
 
 # ---------- Sidebar Callbacks ----------
 def update_age_group():
@@ -315,8 +339,9 @@ def update_age_group():
     else:
         st.session_state.age_grp = "Senior"
 
+
 if 'age_grp' not in st.session_state:
-    st.session_state.age_grp = "Adult" 
+    st.session_state.age_grp = "Adult"
 
 # ---------- Sidebar ----------
 st.sidebar.title("System Menu")
@@ -331,8 +356,8 @@ st.sidebar.header("Policyholder")
 age = st.sidebar.slider("Age", 18, 80, 35, key="policyholder_age", on_change=update_age_group)
 
 age_group = st.sidebar.selectbox(
-    "Age Group (Auto-calculated)", 
-    ["Young", "Adult", "Middle-Aged", "Senior"], 
+    "Age Group (Auto-calculated)",
+    ["Young", "Adult", "Middle-Aged", "Senior"],
     key="age_grp",
     disabled=True
 )
@@ -383,7 +408,7 @@ telematics_score = st.sidebar.slider("Telematics Score", 0, 100, 50)
 # ---------- Build input DataFrame ----------
 input_df = pd.DataFrame([{
     "age": age,
-    "age_group": age_group, 
+    "age_group": age_group,
     "gender": gender,
     "marital_status": marital_status,
     "education_level": education_level,
@@ -444,49 +469,48 @@ st.write(
 
 predict_clicked = st.button("Predict Claim Risk", type="primary", use_container_width=True)
 
-# ---------- Horizon cards ----------
-st.markdown("### Predicted Claim Likelihood")
-
-results = {}
-error = None
+# Persist last results in session state so they survive reruns
+if "last_results" not in st.session_state:
+    st.session_state["last_results"] = {}
 
 if predict_clicked:
     risk_multiplier = calculate_business_risk_adjustment(
-        age=age, gender=gender, years_driving=years_driving, prior_claims=prior_claims, 
+        age=age, gender=gender, years_driving=years_driving, prior_claims=prior_claims,
         violations=traffic_violations, mileage=annual_mileage, credit_score=credit_score,
-        urban_rural=urban_rural, vehicle_age=vehicle_age, vehicle_value=vehicle_value, 
+        urban_rural=urban_rural, vehicle_age=vehicle_age, vehicle_value=vehicle_value,
         vehicle_type=vehicle_type
     )
 
+    new_results = {}
     for horizon, cfg in HORIZONS.items():
         path = cfg["file"]
         if not os.path.exists(path):
-            error = f"Model file `{path}` not found in the repository root."
-            break
+            st.warning(f"Model file `{path}` not found. Skipping {horizon}.")
+            continue
         try:
             model = load_model(path)
-        except Exception as e:
-            error = (
-                f"Could not load `{path}`: {e}\n\n"
-                "Retrain the models with scikit-learn 1.5.0 to match Streamlit Cloud."
-            )
-            break
-        try:
             base_prob = float(model.predict_proba(input_df)[0, 1])
             adjusted_prob = min(base_prob * risk_multiplier, 0.999)
-            results[horizon] = adjusted_prob
-            
+            new_results[horizon] = adjusted_prob
+
             decision = "Claim" if adjusted_prob >= cfg["threshold"] else "No Claim"
             log_prediction(
-                age=age, gender=gender, vehicle_val=vehicle_value, premium=premium_amount, 
-                horizon=horizon, decision=decision, prob=adjusted_prob
+                age=age, gender=gender, vehicle_val=vehicle_value,
+                premium=premium_amount, horizon=horizon,
+                decision=decision, prob=adjusted_prob
             )
         except Exception as e:
-            error = f"Prediction failed for `{path}`: {e}"
-            break
+            st.warning(f"Prediction failed for `{horizon}`: {e}")
 
-if error:
-    st.error(error)
+    if new_results:
+        st.session_state["last_results"] = new_results
+        st.success("Prediction results have been logged to the database.")
+
+# Always read from session state
+results = st.session_state["last_results"]
+
+# ---------- Horizon cards ----------
+st.markdown("### Predicted Claim Likelihood")
 
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -496,36 +520,35 @@ with col2:
 with col3:
     render_card("12 months", HORIZONS["12 months"], results.get("12 months"))
 
-# ---------- Summary table (Horizontal Layout) ----------
+# ---------- Summary table ----------
 if results:
     st.divider()
     st.subheader("Summary")
-    
+
     summary = pd.DataFrame({
         "3 months": [
-            f"{results.get('3 months', 0):.2%}", 
-            risk_level(results.get('3 months', 0))[0], 
-            "Claim" if results.get('3 months', 0) >= HORIZONS["3 months"]["threshold"] else "No Claim", 
-            f"{HORIZONS['3 months']['threshold']:.2f}"
+            f"{results.get('3 months', 0):.2%}",
+            risk_level(results.get('3 months', 0))[0],
+            "Claim" if results.get('3 months', 0) >= HORIZONS["3 months"]["threshold"] else "No Claim",
+            f"{HORIZONS['3 months']['threshold']:.2f}",
         ],
         "6 months": [
-            f"{results.get('6 months', 0):.2%}", 
-            risk_level(results.get('6 months', 0))[0], 
-            "Claim" if results.get('6 months', 0) >= HORIZONS["6 months"]["threshold"] else "No Claim", 
-            f"{HORIZONS['6 months']['threshold']:.2f}"
+            f"{results.get('6 months', 0):.2%}",
+            risk_level(results.get('6 months', 0))[0],
+            "Claim" if results.get('6 months', 0) >= HORIZONS["6 months"]["threshold"] else "No Claim",
+            f"{HORIZONS['6 months']['threshold']:.2f}",
         ],
         "12 months": [
-            f"{results.get('12 months', 0):.2%}", 
-            risk_level(results.get('12 months', 0))[0], 
-            "Claim" if results.get('12 months', 0) >= HORIZONS["12 months"]["threshold"] else "No Claim", 
-            f"{HORIZONS['12 months']['threshold']:.2f}"
-        ]
+            f"{results.get('12 months', 0):.2%}",
+            risk_level(results.get('12 months', 0))[0],
+            "Claim" if results.get('12 months', 0) >= HORIZONS["12 months"]["threshold"] else "No Claim",
+            f"{HORIZONS['12 months']['threshold']:.2f}",
+        ],
     }, index=["Probability", "Risk Level", "Decision", "Threshold"])
-    
-    st.dataframe(summary, use_container_width=True)
-    st.success("Prediction results have been successfully logged to the database.")
 
-# ---------- Reference table (XGBoost only) ----------
+    st.dataframe(summary, use_container_width=True)
+
+# ---------- Reference table ----------
 st.divider()
 st.subheader("Reference Performance")
 
@@ -537,7 +560,7 @@ st.dataframe(pd.DataFrame({
     "F1": [0.8600],
     "AUC-ROC": [0.6776],
     "AUC-PR": [0.8585],
-}), use_container_width=True, hide_index=True, on_select="ignore")
+}), use_container_width=True, hide_index=True)
 
 # ---------- Admin: Download Database (Excel) ----------
 st.divider()
@@ -546,17 +569,19 @@ st.subheader("System Administration (Database Logs)")
 df_logs = get_all_predictions()
 
 if not df_logs.empty:
-    excel_data = convert_df_to_excel(df_logs)
-    
     st.write(f"Total logged predictions in database: **{len(df_logs)}**")
-    st.dataframe(df_logs.head(5), use_container_width=True, hide_index=True)
-    
+    st.dataframe(df_logs.head(50), use_container_width=True, hide_index=True)
+
+    excel_data = convert_df_to_excel(df_logs)
     st.download_button(
         label="Click here to Download Prediction Logs (Excel)",
         data=excel_data,
         file_name=f"prediction_logs_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary"
+        type="primary",
     )
 else:
-    st.info("No predictions have been logged to the database yet. Click 'Predict Claim Risk' to generate data.")
+    st.info(
+        "No predictions have been logged to the database yet. "
+        "Click **Predict Claim Risk** to generate the first entry."
+    )
