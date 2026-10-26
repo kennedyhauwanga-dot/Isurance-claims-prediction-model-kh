@@ -149,7 +149,7 @@ def check_credentials():
 if not check_credentials():
     st.stop()
 
-# ---------- Warm model cache once (fast first Predict / Bulk) ----------
+# ---------- Warm model cache once ----------
 @st.cache_resource(show_spinner="Loading prediction models (first run only)...")
 def warm_models():
     out = {}
@@ -268,8 +268,9 @@ def render_card(horizon, cfg, prob=None):
 
 
 # ---------- Bulk helpers ----------
+# Added "age_group" to the required columns
 BULK_REQUIRED_COLUMNS = [
-    "policy_id", "age", "gender", "marital_status", "education_level",
+    "policy_id", "age", "age_group", "gender", "marital_status", "education_level",
     "employment_status", "income_level", "home_ownership", "region",
     "urban_rural", "vehicle_value", "vehicle_age", "vehicle_age_group",
     "engine_capacity", "vehicle_weight", "vehicle_type", "vehicle_brand",
@@ -284,15 +285,18 @@ BULK_REQUIRED_COLUMNS = [
 def prepare_bulk_input(df):
     df = df.copy()
     df.columns = [c.strip().lower() for c in df.columns]
+    
     missing = [c for c in BULK_REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         return None, f"Missing columns: **{', '.join(missing)}**. Use the template."
+
     for col, mapping in {
         "urban_rural": {"Urban": 1, "Rural": 0},
         "safety_features": {"Yes": 1, "No": 0},
         "has_telematics": {"Yes": 1, "No": 0},
     }.items():
         df[col] = df[col].astype(str).str.strip().str.title().map(mapping).fillna(0).astype(int)
+        
     numeric_cols = [
         "age", "vehicle_value", "vehicle_age", "engine_capacity", "vehicle_weight",
         "premium_amount", "deductible", "bonus_malus", "policy_duration_years",
@@ -301,6 +305,7 @@ def prepare_bulk_input(df):
     ]
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
+        
     return df, None
 
 
@@ -529,7 +534,7 @@ with tab_bulk:
     st.subheader("Bulk Policy Risk & Reserve Recommendation")
 
     template_df = pd.DataFrame([{
-        "policy_id": "P0001", "age": 35, "gender": "Male",
+        "policy_id": "P0001", "age": 35, "age_group": "Adult", "gender": "Male",
         "marital_status": "Married", "education_level": "Bachelor",
         "employment_status": "Employed", "income_level": "Medium",
         "home_ownership": "Own", "region": "Khomas", "urban_rural": "Urban",
@@ -601,7 +606,7 @@ with tab_bulk:
         enriched = st.session_state["bulk_results"]
         st.divider()
 
-        st.subheader("Portfolio Reserve — Total Amount the Insurer Should Hold")
+        st.subheader("🏛 Portfolio Reserve — Total Amount the Insurer Should Hold")
         total_3m = enriched["3M_reserve"].sum()
         total_6m = enriched["6M_reserve"].sum()
         total_12m = enriched["12M_reserve"].sum()
@@ -612,7 +617,7 @@ with tab_bulk:
         m2.metric("Reserve @ 3M", f"NAD {total_3m:,.0f}")
         m3.metric("Reserve @ 6M", f"NAD {total_6m:,.0f}")
         m4.metric("Reserve @ 12M", f"NAD {total_12m:,.0f}")
-        st.metric(" Grand Total Reserve (3M + 6M + 12M combined)",
+        st.metric("💰 Grand Total Reserve (3M + 6M + 12M combined)",
                   f"NAD {grand_total:,.2f}")
 
         st.markdown("##### Breakdown by Horizon")
