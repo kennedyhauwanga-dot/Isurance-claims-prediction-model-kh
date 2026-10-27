@@ -115,12 +115,17 @@ init_db()
 
 # ---------- Authentication ----------
 def check_credentials():
+    """
+    Fixed login flow:
+      - Uses st.form so the submit button reads the full, current widget values atomically.
+      - No per-keystroke on_change callbacks interfering with session state.
+      - Calls st.rerun() after a successful login so the app unlocks on the FIRST click.
+    """
     def verify_login():
-        if (st.session_state.get("username") == "khauwanga" and
-                st.session_state.get("password") == "University@4201"):
+        username_ok = st.session_state.get("username", "") == "khauwanga"
+        password_ok = st.session_state.get("password", "") == "University@4201"
+        if username_ok and password_ok:
             st.session_state["authentication_status"] = True
-            if "password" in st.session_state:
-                del st.session_state["password"]
         else:
             st.session_state["authentication_status"] = False
 
@@ -129,21 +134,37 @@ def check_credentials():
         st.session_state["password"] = ""
         st.session_state["authentication_status"] = None
 
-    if ("authentication_status" not in st.session_state
-            or st.session_state["authentication_status"] != True):
-        st.title("System Login meant only for my Thesis: Kennedy N Hauwanga")
-        st.write("Please enter your credentials to access the Claim Risk Prediction System.")
+    # Already authenticated? Let them through.
+    if st.session_state.get("authentication_status") is True:
+        return True
+
+    st.title("System Login meant only for my Thesis: Kennedy N Hauwanga")
+    st.write("Please enter your credentials to access the Claim Risk Prediction System.")
+
+    with st.form("login_form", clear_on_submit=False):
         st.text_input("Username", key="username")
-        st.text_input("Password", type="password", key="password", on_change=verify_login)
+        st.text_input("Password", type="password", key="password")
         c1, c2 = st.columns([1, 1])
         with c1:
-            st.button("Login", type="primary", on_click=verify_login, use_container_width=True)
+            submitted = st.form_submit_button("Login", type="primary", use_container_width=True)
         with c2:
-            st.button("Clear", on_click=clear_login, use_container_width=True)
-        if st.session_state.get("authentication_status") == False:
-            st.error("Incorrect username or password. Access denied.")
-        return False
-    return True
+            cleared = st.form_submit_button("Clear", use_container_width=True)
+
+    if submitted:
+        verify_login()
+        if st.session_state.get("authentication_status") is True:
+            # Scrub the password from session state before rerunning
+            st.session_state.pop("password", None)
+            st.rerun()
+
+    if cleared:
+        clear_login()
+        st.rerun()
+
+    if st.session_state.get("authentication_status") is False:
+        st.error("Incorrect username or password. Access denied.")
+
+    return False
 
 
 if not check_credentials():
@@ -268,7 +289,6 @@ def render_card(horizon, cfg, prob=None):
 
 
 # ---------- Bulk helpers ----------
-# Added "age_group" to the required columns
 BULK_REQUIRED_COLUMNS = [
     "policy_id", "age", "age_group", "gender", "marital_status", "education_level",
     "employment_status", "income_level", "home_ownership", "region",
@@ -285,7 +305,7 @@ BULK_REQUIRED_COLUMNS = [
 def prepare_bulk_input(df):
     df = df.copy()
     df.columns = [c.strip().lower() for c in df.columns]
-    
+
     missing = [c for c in BULK_REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         return None, f"Missing columns: **{', '.join(missing)}**. Use the template."
@@ -296,7 +316,7 @@ def prepare_bulk_input(df):
         "has_telematics": {"Yes": 1, "No": 0},
     }.items():
         df[col] = df[col].astype(str).str.strip().str.title().map(mapping).fillna(0).astype(int)
-        
+
     numeric_cols = [
         "age", "vehicle_value", "vehicle_age", "engine_capacity", "vehicle_weight",
         "premium_amount", "deductible", "bonus_malus", "policy_duration_years",
@@ -305,7 +325,7 @@ def prepare_bulk_input(df):
     ]
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-        
+
     return df, None
 
 
@@ -376,7 +396,8 @@ if 'age_grp' not in st.session_state:
 # ---------- Sidebar ----------
 st.sidebar.title("System Menu")
 if st.sidebar.button("⏻ Logout", type="primary", use_container_width=True):
-    del st.session_state["authentication_status"]
+    st.session_state["authentication_status"] = None
+    st.session_state.pop("password", None)
     st.rerun()
 
 st.sidebar.divider(); st.sidebar.header("Policyholder")
