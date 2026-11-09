@@ -4,8 +4,8 @@ Insurance Claim Risk Prediction - XGBoost prototype
 Author: Kennedy N. Hauwanga (Student No. 218208399)
 
 Tabs:
-  1. Single Policyholder
-  2. Bulk Policy File   (upload -> per-policy risk 3M/6M/12M + reserve + portfolio total)
+  1. Single Policyholder  (Predicts CLAIM PROBABILITY for 3M, 6M, 12M)
+  2. Bulk Policy File     (Predicts CLAIM PROBABILITY + RESERVE amounts for the portfolio)
 
 Bulk files are TOLERANT of missing columns:
   - Only `policy_id` is generated if absent.
@@ -827,28 +827,9 @@ st.divider()
 tab_single, tab_bulk = st.tabs(["Single Policyholder", "Bulk Policy File"])
 
 # ============================================================
-# TAB 1 - Single
+# TAB 1 - Single (PROBABILITIES ONLY, NO RESERVES)
 # ============================================================
 with tab_single:
-    st.subheader("Reserve Assumptions")
-    a1, a2, a3 = st.columns(3)
-    with a1:
-        od_severity_rate = st.slider(
-            "OD Severity Rate (% of vehicle value)",
-            min_value=0.05, max_value=1.00, value=0.30, step=0.05,
-            help="Average own-damage repair cost as a share of vehicle value.")
-    with a2:
-        tpl_base_severity = st.number_input(
-            "TPL Base Severity (NAD per claim)",
-            min_value=10_000, max_value=1_000_000, value=150_000, step=10_000,
-            help="Typical third-party injury/legal cost. NOT tied to your car's value.")
-    with a3:
-        safety_loading = st.slider(
-            "Safety Loading Multiplier",
-            min_value=1.00, max_value=2.00, value=1.25, step=0.05,
-            help="Prudential margin on top of expected loss.")
-
-    st.divider()
     st.subheader("Generate Prediction")
     predict_clicked = st.button("Predict Claim Risk", type="primary", use_container_width=True)
 
@@ -868,11 +849,6 @@ with tab_single:
             urban_rural=urban_rural,
             density=computed_density,
         )
-        od_sev_load  = calculate_od_severity_loading(vehicle_value, vehicle_type, vehicle_age, gender)
-        tpl_sev_load = calculate_tpl_severity_loading(vehicle_type, urban_rural, region, gender)
-
-        od_severity_nad  = vehicle_value * od_severity_rate * od_sev_load
-        tpl_severity_nad = tpl_base_severity * tpl_sev_load
 
         new = {}
         for h, cfg in HORIZONS.items():
@@ -885,16 +861,9 @@ with tab_single:
                 tpl_prob = min(base * TPL_CLAIM_SHARE * tpl_freq, 0.90)
                 combined = min(od_prob + tpl_prob, 0.95)
 
-                od_reserve  = od_prob  * od_severity_nad  * safety_loading
-                tpl_reserve = tpl_prob * tpl_severity_nad * safety_loading
-
                 new[h] = {
                     "od_prob": od_prob, "tpl_prob": tpl_prob,
                     "combined": combined,
-                    "od_severity_nad": od_severity_nad,
-                    "tpl_severity_nad": tpl_severity_nad,
-                    "od_reserve": od_reserve, "tpl_reserve": tpl_reserve,
-                    "total_reserve": od_reserve + tpl_reserve,
                     "od_freq": od_freq, "tpl_freq": tpl_freq,
                 }
                 decision = "Claim" if combined >= cfg["threshold"] else "No Claim"
@@ -919,8 +888,6 @@ with tab_single:
                     st.write("**Crowding:** falling back to urban/rural flag.")
                 st.write(f"**OD frequency multiplier:** {od_freq:.2f}")
                 st.write(f"**TPL frequency multiplier:** {tpl_freq:.2f}")
-                st.write(f"**OD severity loading:** {od_sev_load:.2f}")
-                st.write(f"**TPL severity loading:** {tpl_sev_load:.2f}")
 
     results = st.session_state["last_results"]
     st.markdown("### Predicted Claim Likelihood")
@@ -932,10 +899,6 @@ with tab_single:
     if results:
         st.divider()
         st.subheader("Risk Breakdown — Own Damage vs Third-Party Liability")
-        st.caption(
-            "Each risk is calculated as **frequency × severity**. "
-            "Crowding drives frequency; vehicle value drives OD severity only."
-        )
         rows = []
         for h in HORIZONS:
             r = results.get(h)
@@ -945,25 +908,14 @@ with tab_single:
                 "Horizon": h,
                 "OD Freq ×": f"{r['od_freq']:.2f}",
                 "OD Prob":    f"{r['od_prob']:.2%}",
-                "OD Sev (NAD)": f"{r['od_severity_nad']:,.0f}",
-                "OD Reserve (NAD)": f"{r['od_reserve']:,.2f}",
                 "TPL Freq ×": f"{r['tpl_freq']:.2f}",
                 "TPL Prob":   f"{r['tpl_prob']:.2%}",
-                "TPL Sev (NAD)": f"{r['tpl_severity_nad']:,.0f}",
-                "TPL Reserve (NAD)": f"{r['tpl_reserve']:,.2f}",
-                "Total Reserve (NAD)": f"{r['total_reserve']:,.2f}",
+                "Combined Prob": f"{r['combined']:.2%}",
             })
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-        st.info(
-            f"**Reserve to hold for 12 months:** "
-            f"NAD {results.get('12 months', {}).get('total_reserve', 0):,.2f} "
-            f"(OD {results.get('12 months', {}).get('od_reserve', 0):,.2f} + "
-            f"TPL {results.get('12 months', {}).get('tpl_reserve', 0):,.2f})."
-        )
-
 # ============================================================
-# TAB 2 - Bulk
+# TAB 2 - Bulk (PROBABILITIES + RESERVES)
 # ============================================================
 with tab_bulk:
     st.subheader("Bulk Policy Risk & Reserve Recommendation")
@@ -1012,7 +964,7 @@ with tab_bulk:
     uploaded = st.file_uploader("Upload policy file (CSV or Excel)",
                                 type=["csv", "xlsx", "xls"], key="bulk_upload")
 
-    st.markdown("#### Reserve Assumptions")
+    st.markdown("#### Reserve Assumptions (Active for Bulk Calculation)")
     ca, cb, cc = st.columns(3)
     with ca:
         bulk_od_rate = st.slider("OD Severity Rate (% of vehicle value)",
@@ -1024,7 +976,7 @@ with tab_bulk:
         bulk_safety = st.slider("Safety Loading Multiplier",
             min_value=1.00, max_value=2.00, value=1.25, step=0.05)
 
-    run_bulk = st.button("Run Bulk Prediction", type="primary",
+    run_bulk = st.button("Run Bulk Prediction & Calculate Reserves", type="primary",
                          use_container_width=True, disabled=uploaded is None)
 
     if uploaded is not None:
@@ -1054,7 +1006,7 @@ with tab_bulk:
 
                 if run_bulk:
                     try:
-                        with st.spinner("Running predictions for all policies..."):
+                        with st.spinner("Running predictions and calculating reserves..."):
                             enriched = run_bulk_prediction(prepared, bulk_od_rate,
                                                            bulk_tpl_base, bulk_safety)
                         st.session_state["bulk_results"] = enriched
@@ -1070,9 +1022,9 @@ with tab_bulk:
 
         st.subheader("Portfolio Reserve Ladder")
         st.caption(
-            "Own Damage and Third-Party Liability are calculated separately. "
+            "Own Damage and Third-Party Liability reserves are calculated separately. "
             "3M, 6M and 12M horizons are cumulative and must NOT be summed. "
-            "The 12M combined reserve is the solvency figure."
+            "The 12M combined reserve is the total amount the insurer should hold."
         )
 
         t3_od  = enriched["3M_od_reserve"].sum();  t3_tpl  = enriched["3M_tpl_reserve"].sum()
