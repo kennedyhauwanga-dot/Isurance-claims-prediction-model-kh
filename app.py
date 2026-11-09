@@ -712,4 +712,412 @@ if st.sidebar.button("⏻ Logout", type="primary", use_container_width=True):
 st.sidebar.divider(); st.sidebar.header("Policyholder")
 age = st.sidebar.slider("Age", 18, 80, 35, key="policyholder_age", on_change=update_age_group)
 age_group = st.sidebar.selectbox("Age Group (Auto-calculated)",
-    ["
+    ["Young", "Adult", "Middle-Aged", "Senior"], key="age_grp", disabled=True)
+gender = st.sidebar.selectbox("Gender", ["Male", "Female"])
+marital_status = st.sidebar.selectbox("Marital Status", ["Single", "Married", "Divorced", "Widowed"])
+education_level = st.sidebar.selectbox("Education Level", ["High School", "Bachelor", "Master", "PhD"])
+employment_status = st.sidebar.selectbox("Employment", ["Employed", "Self-Employed", "Unemployed", "Retired"])
+income_level = st.sidebar.selectbox("Income Level", ["Low", "Medium", "High"])
+home_ownership = st.sidebar.selectbox("Home Ownership", ["Own", "Rent", "Mortgage"])
+
+# --- Region & Town (all 14 regions + all towns) ---
+region = st.sidebar.selectbox("Region", REGIONS)
+town = st.sidebar.selectbox("Town", TOWNS_BY_REGION[region])
+
+urban_rural = st.sidebar.selectbox("Urban/Rural", ["Urban", "Rural"])
+
+st.sidebar.divider(); st.sidebar.header("Vehicle")
+vehicle_value = st.sidebar.number_input("Vehicle Value (NAD)", 20_000, 1_500_000, 250_000, step=10_000)
+vehicle_age = st.sidebar.slider("Vehicle Age (yrs)", 0, 25, 5)
+vehicle_age_group = st.sidebar.selectbox("Vehicle Age Group", ["New", "Recent", "Old"])
+engine_capacity = st.sidebar.number_input("Engine Capacity (cc)", 800, 5000, 2000, step=100)
+vehicle_weight = st.sidebar.number_input("Vehicle Weight (kg)", 700, 3500, 1500, step=50)
+vehicle_type = st.sidebar.selectbox("Vehicle Type", ["Sedan", "SUV", "Pickup", "Hatchback", "Minivan"])
+vehicle_brand = st.sidebar.selectbox("Vehicle Brand", ["Toyota", "Volkswagen", "Ford", "Nissan", "Hyundai", "BMW"])
+fuel_type = st.sidebar.selectbox("Fuel Type", ["Petrol", "Diesel", "Hybrid"])
+transmission = st.sidebar.selectbox("Transmission", ["Manual", "Automatic"])
+vehicle_usage = st.sidebar.selectbox("Vehicle Usage", ["Private", "Commercial"])
+safety_features = st.sidebar.selectbox("Safety Features", ["Yes", "No"])
+
+st.sidebar.divider(); st.sidebar.header("Policy")
+premium_amount = st.sidebar.number_input("Premium Amount (NAD)", 1_500, 80_000, 15_000, step=500)
+deductible = st.sidebar.selectbox("Deductible (NAD)", [1000, 2500, 5000, 10000, 25000], index=2)
+bonus_malus = st.sidebar.slider("Bonus-Malus", -5, 5, 0)
+policy_type = st.sidebar.selectbox("Policy Type", ["Comprehensive", "Third-Party", "Third-Party Fire & Theft"])
+payment_frequency = st.sidebar.selectbox("Payment Frequency", ["Monthly", "Quarterly", "Annual"])
+policy_duration_years = st.sidebar.slider("Policy Duration (yrs)", 0, 20, 3)
+
+st.sidebar.divider(); st.sidebar.header("History & Telematics")
+years_driving = st.sidebar.slider("Years Driving Experience", 0, 60, 15)
+prior_claims = st.sidebar.number_input("Prior Claims (Last 3 Years)", 0, 20, 0)
+prior_claim_amount = st.sidebar.number_input("Prior Claim Amount (NAD)", 0, 500_000, 0, step=1000)
+traffic_violations = st.sidebar.number_input("Traffic Violations", 0, 20, 0)
+credit_score = st.sidebar.slider("Credit Score", 300, 850, 650)
+annual_mileage = st.sidebar.number_input("Annual Mileage (km)", 1_000, 100_000, 20_000, step=1_000)
+has_telematics = st.sidebar.selectbox("Has Telematics", ["Yes", "No"])
+telematics_score = st.sidebar.slider("Telematics Score", 0, 100, 50)
+
+# ---------- Build single input ----------
+input_df = pd.DataFrame([{
+    "age": age, "age_group": age_group, "gender": gender,
+    "marital_status": marital_status, "education_level": education_level,
+    "employment_status": employment_status, "income_level": income_level,
+    "home_ownership": home_ownership, "region": region, "town": town,
+    "urban_rural": 1 if urban_rural == "Urban" else 0,
+    "vehicle_value": vehicle_value, "vehicle_age": vehicle_age,
+    "vehicle_age_group": vehicle_age_group, "engine_capacity": engine_capacity,
+    "vehicle_weight": vehicle_weight, "vehicle_type": vehicle_type,
+    "vehicle_brand": vehicle_brand, "fuel_type": fuel_type,
+    "transmission": transmission, "vehicle_usage": vehicle_usage,
+    "safety_features": 1 if safety_features == "Yes" else 0,
+    "premium_amount": premium_amount, "deductible": deductible,
+    "bonus_malus": bonus_malus, "policy_type": policy_type,
+    "payment_frequency": payment_frequency,
+    "policy_duration_years": policy_duration_years,
+    "years_driving": years_driving, "prior_claims": prior_claims,
+    "prior_claim_amount": prior_claim_amount,
+    "traffic_violations": traffic_violations, "credit_score": credit_score,
+    "annual_mileage": annual_mileage,
+    "has_telematics": 1 if has_telematics == "Yes" else 0,
+    "telematics_score": telematics_score,
+}])
+
+current_fp = hash(tuple(input_df.iloc[0].astype(str).tolist()))
+if "input_fingerprint" not in st.session_state:
+    st.session_state["input_fingerprint"] = current_fp
+if "last_results" not in st.session_state:
+    st.session_state["last_results"] = {}
+if st.session_state["input_fingerprint"] != current_fp:
+    st.session_state["input_fingerprint"] = current_fp
+    st.session_state["last_results"] = {}
+
+# ---------- Header ----------
+st.title("Insurance Claim Risk Prediction")
+st.markdown("<h4 style='color:#4a5568;margin-top:-12px;font-weight:500;'>"
+            "by Kennedy N. Hauwanga</h4>", unsafe_allow_html=True)
+st.caption("University of Namibia research thesis | Student No. 218208399")
+st.divider()
+
+tab_single, tab_bulk = st.tabs(["Single Policyholder", "Bulk Policy File"])
+
+# ============================================================
+# TAB 1 - Single (PROBABILITIES ONLY, NO RESERVES)
+# ============================================================
+with tab_single:
+    st.subheader("Generate Prediction")
+    predict_clicked = st.button("Predict Claim Risk", type="primary", use_container_width=True)
+
+    if predict_clicked:
+        # Pass density=None to fall back cleanly to Urban/Rural
+        od_freq = calculate_od_frequency_multiplier(
+            age=age, gender=gender, years_driving=years_driving,
+            prior_claims=prior_claims, violations=traffic_violations,
+            mileage=annual_mileage, credit_score=credit_score,
+            urban_rural=urban_rural, vehicle_age=vehicle_age,
+            safety_features=1 if safety_features == "Yes" else 0,
+            density=None,
+        )
+        tpl_freq = calculate_tpl_frequency_multiplier(
+            age=age, gender=gender, years_driving=years_driving,
+            prior_claims=prior_claims, violations=traffic_violations,
+            mileage=annual_mileage, credit_score=credit_score,
+            urban_rural=urban_rural,
+            density=None,
+        )
+
+        new = {}
+        for h, cfg in HORIZONS.items():
+            if MODELS.get(h) is None:
+                st.warning(f"Model file `{cfg['file']}` not found. Skipping {h}.")
+                continue
+            try:
+                base = float(MODELS[h].predict_proba(input_df[MODEL_FEATURES])[0, 1])
+                od_prob  = min(base * OD_CLAIM_SHARE  * od_freq,  0.95)
+                tpl_prob = min(base * TPL_CLAIM_SHARE * tpl_freq, 0.90)
+                combined = min(od_prob + tpl_prob, 0.95)
+
+                new[h] = {
+                    "od_prob": od_prob, "tpl_prob": tpl_prob,
+                    "combined": combined,
+                    "od_freq": od_freq, "tpl_freq": tpl_freq,
+                }
+                decision = "Claim" if combined >= cfg["threshold"] else "No Claim"
+                log_prediction(age=age, gender=gender, vehicle_val=vehicle_value,
+                               premium=premium_amount, horizon=h,
+                               decision=decision, prob=combined)
+            except Exception as e:
+                st.warning(f"Prediction failed for `{h}`: {e}")
+
+        if new:
+            st.session_state["last_results"] = new
+            st.success("Prediction results have been logged to the database.")
+
+    results = st.session_state["last_results"]
+    st.markdown("### Predicted Claim Likelihood")
+    c1, c2, c3 = st.columns(3)
+    with c1: render_card("3 months",  HORIZONS["3 months"],  results.get("3 months",  {}).get("combined"))
+    with c2: render_card("6 months",  HORIZONS["6 months"],  results.get("6 months",  {}).get("combined"))
+    with c3: render_card("12 months", HORIZONS["12 months"], results.get("12 months", {}).get("combined"))
+
+    if results:
+        st.divider()
+        st.subheader("Risk Breakdown — Own Damage vs Third-Party Liability")
+        rows = []
+        for h in HORIZONS:
+            r = results.get(h)
+            if not r:
+                continue
+            
+            # CLEAN TABLE: Removed the OD/TPL Freq multipliers completely
+            rows.append({
+                "Horizon": h,
+                "OD Prob":    f"{r['od_prob']:.2%}",
+                "TPL Prob":   f"{r['tpl_prob']:.2%}",
+                "Combined Prob": f"{r['combined']:.2%}",
+            })
+                
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+# ============================================================
+# TAB 2 - Bulk (PROBABILITIES + RESERVES)
+# ============================================================
+with tab_bulk:
+    st.subheader("Bulk Policy Risk & Reserve Recommendation")
+
+    st.info(
+        "**Flexible upload:** only `policy_id` is recommended — everything else is "
+        "auto-filled with sensible defaults if missing. Use the template below "
+        "for the full reference schema."
+    )
+
+    template_df = pd.DataFrame([{
+        "policy_id": "P0001", "age": 35, "age_group": "Adult", "gender": "Male",
+        "marital_status": "Married", "education_level": "Bachelor",
+        "employment_status": "Employed", "income_level": "Medium",
+        "home_ownership": "Own", "region": "Khomas", "town": "Windhoek",
+        "urban_rural": "Urban", "area_km2": 10.0, "population": 30000,
+        "population_density": 3000.0, "vehicle_value": 250000,
+        "vehicle_age": 5, "vehicle_age_group": "Recent",
+        "engine_capacity": 2000, "vehicle_weight": 1500,
+        "vehicle_type": "Sedan", "vehicle_brand": "Toyota",
+        "fuel_type": "Petrol", "transmission": "Manual",
+        "vehicle_usage": "Private", "safety_features": "Yes",
+        "premium_amount": 15000, "deductible": 5000, "bonus_malus": 0,
+        "policy_type": "Comprehensive", "payment_frequency": "Monthly",
+        "policy_duration_years": 3, "years_driving": 15,
+        "prior_claims": 0, "prior_claim_amount": 0,
+        "traffic_violations": 0, "credit_score": 650, "annual_mileage": 20000,
+        "has_telematics": "Yes", "telematics_score": 50,
+    }])
+    with st.expander("📄 Download reference template (all columns)"):
+        st.dataframe(template_df, use_container_width=True, hide_index=True)
+        st.caption(
+            "Missing columns will be **auto-filled** at prediction time — you do "
+            "not have to include everything. `area_km2` + `population` OR "
+            "`population_density` are optional density inputs."
+        )
+        st.download_button("Download template (CSV)",
+            data=template_df.to_csv(index=False).encode("utf-8"),
+            file_name="bulk_policy_template.csv", mime="text/csv")
+        st.download_button("Download template (Excel)",
+            data=convert_df_to_excel(template_df, "Template"),
+            file_name="bulk_policy_template.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    st.divider()
+    uploaded = st.file_uploader("Upload policy file (CSV or Excel)",
+                                type=["csv", "xlsx", "xls"], key="bulk_upload")
+
+    st.markdown("#### Reserve Assumptions (Active for Bulk Calculation)")
+    ca, cb, cc = st.columns(3)
+    with ca:
+        bulk_od_rate = st.slider("OD Severity Rate (% of vehicle value)",
+            min_value=0.05, max_value=1.00, value=0.30, step=0.05)
+    with cb:
+        bulk_tpl_base = st.number_input("TPL Base Severity (NAD per claim)",
+            min_value=10_000, max_value=1_000_000, value=150_000, step=10_000)
+    with cc:
+        bulk_safety = st.slider("Safety Loading Multiplier",
+            min_value=1.00, max_value=2.00, value=1.25, step=0.05)
+
+    run_bulk = st.button("Run Bulk Prediction & Calculate Reserves", type="primary",
+                         use_container_width=True, disabled=uploaded is None)
+
+    if uploaded is not None:
+        try:
+            raw = pd.read_csv(uploaded) if uploaded.name.lower().endswith(".csv") else pd.read_excel(uploaded)
+        except Exception as e:
+            st.error(f"Could not read file: {e}")
+            raw = None
+
+        if raw is not None:
+            st.write(f"**Rows detected:** {len(raw)}")
+            with st.expander("Preview uploaded data (first 5 rows)"):
+                st.dataframe(raw.head(5), use_container_width=True, hide_index=True)
+
+            prepared, err, filled = prepare_bulk_input(raw)
+            if err:
+                st.error(err)
+            else:
+                if filled:
+                    st.warning(
+                        f"**Auto-filled {len(filled)} column(s)** with defaults: "
+                        f"`{', '.join(filled)}` — predictions will use the "
+                        f"training-median defaults for these features."
+                    )
+                else:
+                    st.success("All expected columns present in the upload.")
+
+                if run_bulk:
+                    try:
+                        with st.spinner("Running predictions and calculating reserves..."):
+                            enriched = run_bulk_prediction(prepared, bulk_od_rate,
+                                                           bulk_tpl_base, bulk_safety)
+                        st.session_state["bulk_results"] = enriched
+                        st.success(f"Bulk prediction complete for **{len(enriched)}** policies.")
+                    except FileNotFoundError as e:
+                        st.error(str(e))
+                    except Exception as e:
+                        st.error(f"Bulk prediction failed: {e}")
+
+    if "bulk_results" in st.session_state:
+        enriched = st.session_state["bulk_results"]
+        st.divider()
+
+        st.subheader("Portfolio Reserve Ladder")
+        st.caption(
+            "Own Damage and Third-Party Liability reserves are calculated separately. "
+            "3M, 6M and 12M horizons are cumulative and must NOT be summed. "
+            "The 12M combined reserve is the total amount the insurer should hold."
+        )
+
+        t3_od  = enriched["3M_od_reserve"].sum();  t3_tpl  = enriched["3M_tpl_reserve"].sum()
+        t6_od  = enriched["6M_od_reserve"].sum();  t6_tpl  = enriched["6M_tpl_reserve"].sum()
+        t12_od = enriched["12M_od_reserve"].sum(); t12_tpl = enriched["12M_tpl_reserve"].sum()
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Policies", f"{len(enriched):,}")
+        m2.metric("3M Reserve (OD+TPL)",  f"NAD {t3_od + t3_tpl:,.0f}")
+        m3.metric("6M Reserve (OD+TPL)",  f"NAD {t6_od + t6_tpl:,.0f}")
+        m4.metric("12M Reserve (OD+TPL)", f"NAD {t12_od + t12_tpl:,.0f}",
+                  help="Cumulative expected loss over 12 months — the solvency figure.")
+
+        st.markdown("##### Reserve breakdown by horizon")
+        st.dataframe(portfolio_summary(enriched), use_container_width=True, hide_index=True)
+
+        st.markdown("##### 12-Month reserve: OD vs TPL")
+        comp = pd.DataFrame({
+            "Risk type": ["Own Damage", "Third-Party Liability", "Combined"],
+            "12M Reserve (NAD)": [
+                f"{t12_od:,.2f}", f"{t12_tpl:,.2f}", f"{t12_od + t12_tpl:,.2f}",
+            ],
+        })
+        st.dataframe(comp, use_container_width=True, hide_index=True)
+
+        st.markdown("##### Crowding composition of the book")
+        crowd = (
+            enriched.assign(density=pd.to_numeric(enriched.get("population_density"), errors="coerce"))
+            .assign(band=lambda d: d["density"].apply(
+                lambda v: density_band(None if pd.isna(v) else v)))
+            .groupby("band")
+            .agg(policies=("policy_id", "count"),
+                 total_12m_reserve=("12M_total_reserve", "sum"))
+            .reset_index()
+            .rename(columns={"band": "Crowding band",
+                             "policies": "Policies",
+                             "total_12m_reserve": "12M Reserve (NAD)"})
+        )
+        crowd["12M Reserve (NAD)"] = crowd["12M Reserve (NAD)"].map(lambda v: f"{v:,.2f}")
+        st.dataframe(crowd, use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.subheader("Per-Policy Risk and Reserve")
+
+        show_cols = [
+            "policy_id", "region", "town",
+            "population_density", "crowding_band",
+            "3M_od_prob", "3M_tpl_prob", "3M_od_reserve", "3M_tpl_reserve", "3M_total_reserve",
+            "6M_od_prob", "6M_tpl_prob", "6M_od_reserve", "6M_tpl_reserve", "6M_total_reserve",
+            "12M_od_prob", "12M_tpl_prob", "12M_od_reserve", "12M_tpl_reserve", "12M_total_reserve",
+            "total_reserve",
+        ]
+        show_cols = [c for c in show_cols if c in enriched.columns]
+        view = enriched[show_cols].copy()
+
+        for c in ["3M_od_prob", "3M_tpl_prob", "6M_od_prob", "6M_tpl_prob", "12M_od_prob", "12M_tpl_prob"]:
+            if c in view.columns:
+                view[c] = view[c].map(lambda v: f"{v:.2%}")
+        for c in [x for x in show_cols if "reserve" in x]:
+            if c in view.columns:
+                view[c] = view[c].map(lambda v: f"{v:,.2f}")
+        if "population_density" in view.columns:
+            view["population_density"] = view["population_density"].map(
+                lambda v: "n/a" if pd.isna(v) else f"{v:,.0f}")
+
+        view = view.rename(columns={
+            "policy_id": "Policy", "region": "Region", "town": "Town",
+            "population_density": "Density (people/km²)",
+            "crowding_band": "Crowding band",
+            "3M_od_prob": "3M OD Prob",  "3M_tpl_prob": "3M TPL Prob",
+            "3M_od_reserve": "3M OD Res.", "3M_tpl_reserve": "3M TPL Res.",
+            "3M_total_reserve": "3M Total",
+            "6M_od_prob": "6M OD Prob",  "6M_tpl_prob": "6M TPL Prob",
+            "6M_od_reserve": "6M OD Res.", "6M_tpl_reserve": "6M TPL Res.",
+            "6M_total_reserve": "6M Total",
+            "12M_od_prob": "12M OD Prob", "12M_tpl_prob": "12M TPL Prob",
+            "12M_od_reserve": "12M OD Res.", "12M_tpl_reserve": "12M TPL Res.",
+            "12M_total_reserve": "12M Total",
+            "total_reserve": "Total Reserve (12M)",
+        })
+        st.dataframe(view, use_container_width=True, hide_index=True)
+
+        st.markdown("#### ⬇ Downloads")
+        dc1, dc2 = st.columns(2)
+        with dc1:
+            st.download_button(
+                "Download full results (Excel)",
+                data=convert_df_to_excel(enriched, "Bulk_Predictions"),
+                file_name=f"bulk_predictions_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary", use_container_width=True)
+        with dc2:
+            st.download_button(
+                "Download full results (CSV)",
+                data=enriched.to_csv(index=False).encode("utf-8"),
+                file_name=f"bulk_predictions_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv", use_container_width=True)
+
+        if st.button("Clear Bulk Results"):
+            del st.session_state["bulk_results"]
+            st.rerun()
+
+# ---------- Reference table ----------
+st.divider()
+st.subheader("Reference Performance")
+st.dataframe(pd.DataFrame({
+    "Model": ["XGBoost"], "Accuracy": [0.7510], "Precision": [0.7500],
+    "Recall": [1.0000], "F1": [0.8600],
+    "AUC-ROC": [0.6776], "AUC-PR": [0.8585],
+}), use_container_width=True, hide_index=True)
+
+# ---------- Admin: Logs (paginated) ----------
+st.divider()
+st.subheader("System Administration (Database Logs)")
+df_logs = get_all_predictions()
+if not df_logs.empty:
+    total = len(df_logs)
+    st.write(f"Total logged predictions in database: **{total}**")
+    PAGE_SIZE = 50
+    pages = max(1, (total - 1) // PAGE_SIZE + 1)
+    page = st.number_input("Page", min_value=1, max_value=pages, value=1, step=1)
+    start = (page - 1) * PAGE_SIZE
+    st.dataframe(df_logs.iloc[start:start + PAGE_SIZE],
+                 use_container_width=True, hide_index=True)
+
+    st.download_button("Click here to Download Prediction Logs (Excel)",
+        data=convert_df_to_excel(df_logs),
+        file_name=f"prediction_logs_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary")
+else:
+    st.info("No predictions logged yet. Click **Predict Claim Risk** to generate the first entry.")
