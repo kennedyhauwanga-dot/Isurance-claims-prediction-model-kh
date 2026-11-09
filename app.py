@@ -7,11 +7,9 @@ Tabs:
   1. Single Policyholder  (Predicts CLAIM PROBABILITY for 3M, 6M, 12M)
   2. Bulk Policy File     (Predicts CLAIM PROBABILITY + RESERVE amounts for the portfolio)
 
-Bulk files are TOLERANT of missing columns:
-  - Only `policy_id` is generated if absent.
-  - All other model columns fall back to training-median defaults.
-  - Density: prefers area_km2 + population, else population_density,
-    else falls back to urban_rural inside the adjustment layer.
+Risk adjustments:
+  - Rural areas strongly reduce frequency and severity for both OD and TPL.
+  - Urban areas increase frequency and severity, especially for TPL.
 """
 import os
 import numpy as np
@@ -89,10 +87,8 @@ BULK_REQUIRED_COLUMNS = [
     "credit_score", "annual_mileage", "has_telematics", "telematics_score",
 ]
 
-# These are the columns the XGBoost model actually consumes.
 MODEL_FEATURES = [c for c in BULK_REQUIRED_COLUMNS if c not in ("policy_id", "town")]
 
-# Training-median defaults used when a column is missing from the upload.
 MODEL_DEFAULTS = {
     "age": 35, "age_group": "Adult", "gender": "Male",
     "marital_status": "Married", "education_level": "Bachelor",
@@ -300,33 +296,33 @@ def density_band(density):
 def density_od_delta(density):
     if density is None:
         return None
-    if density < 500:    return -0.05
-    if density < 1500:   return  0.00
-    if density < 3000:   return  0.06
-    if density < 6000:   return  0.12
-    if density < 12000:  return  0.18
-    return 0.25
+    if density < 500:    return -0.15
+    if density < 1500:   return -0.05
+    if density < 3000:   return  0.05
+    if density < 6000:   return  0.15
+    if density < 12000:  return  0.25
+    return 0.35
 
 
 def density_tpl_delta(density):
     if density is None:
         return None
-    if density < 500:    return -0.10
-    if density < 1500:   return  0.00
-    if density < 3000:   return  0.12
-    if density < 6000:   return  0.22
-    if density < 12000:  return  0.35
-    return 0.50
+    if density < 500:    return -0.30
+    if density < 1500:   return -0.10
+    if density < 3000:   return  0.10
+    if density < 6000:   return  0.25
+    if density < 12000:  return  0.40
+    return 0.60
 
 
 def density_delta_vector(series, kind="tpl"):
     dens = pd.to_numeric(series, errors="coerce")
     if kind == "od":
         breaks = [-np.inf, 500, 1500, 3000, 6000, 12000, np.inf]
-        values = [-0.05, 0.00, 0.06, 0.12, 0.18, 0.25]
+        values = [-0.15, -0.05, 0.05, 0.15, 0.25, 0.35]
     else:
         breaks = [-np.inf, 500, 1500, 3000, 6000, 12000, np.inf]
-        values = [-0.10, 0.00, 0.12, 0.22, 0.35, 0.50]
+        values = [-0.30, -0.10, 0.10, 0.25, 0.40, 0.60]
     return np.select(
         [(dens >= breaks[i]) & (dens < breaks[i + 1]) for i in range(len(values))],
         values,
@@ -344,10 +340,11 @@ def calculate_od_frequency_multiplier(age, gender, years_driving, prior_claims, 
     if str(gender).strip().title() == "Female":
         m -= 0.10
 
+    # Strong Urban vs Rural split
     if density is not None:
         m += density_od_delta(density)
     else:
-        m += 0.08 if urban_rural == "Urban" else -0.05
+        m += 0.15 if urban_rural == "Urban" else -0.20
 
     if vehicle_age > 10:      m += 0.12
     elif vehicle_age > 5:     m += 0.05
@@ -367,7 +364,7 @@ def calculate_od_frequency_multiplier(age, gender, years_driving, prior_claims, 
     if mileage > 30000:    m += 0.12
     if credit_score < 550: m += 0.08
     if violations > 0:     m += 0.05 * violations
-    return max(0.60, min(m, 1.90))
+    return max(0.50, min(m, 1.90))
 
 
 def calculate_od_frequency_multiplier_vector(df):
@@ -375,7 +372,7 @@ def calculate_od_frequency_multiplier_vector(df):
     is_female = df["gender"].astype(str).str.strip().str.title() == "Female"
     m -= np.where(is_female, 0.10, 0.0)
 
-    urban_fallback_od = np.where(df["urban_rural"] == 1, 0.08, -0.05)
+    urban_fallback_od = np.where(df["urban_rural"] == 1, 0.15, -0.20)
     if "population_density" in df.columns:
         dens_delta = density_delta_vector(df["population_density"], kind="od")
         dens_delta = np.where(pd.isna(dens_delta), urban_fallback_od, dens_delta)
@@ -402,7 +399,7 @@ def calculate_od_frequency_multiplier_vector(df):
     m += np.where(df["annual_mileage"] > 30000, 0.12, 0.0)
     m += np.where(df["credit_score"] < 550, 0.08, 0.0)
     m += 0.05 * df["traffic_violations"]
-    return m.clip(0.60, 1.90).values
+    return m.clip(0.50, 1.90).values
 
 
 def calculate_od_severity_loading(vehicle_value, vehicle_type, vehicle_age, gender):
@@ -447,10 +444,11 @@ def calculate_tpl_frequency_multiplier(age, gender, years_driving, prior_claims,
     if str(gender).strip().title() == "Female":
         m -= 0.10
 
+    # Very strong Urban vs Rural split for TPL
     if density is not None:
         m += density_tpl_delta(density)
     else:
-        m += 0.18 if urban_rural == "Urban" else -0.12
+        m += 0.30 if urban_rural == "Urban" else -0.30
 
     if prior_claims == 1:   m += 0.30
     elif prior_claims == 2: m += 0.55
@@ -467,7 +465,7 @@ def calculate_tpl_frequency_multiplier(age, gender, years_driving, prior_claims,
 
     if mileage > 30000:    m += 0.10
     if credit_score < 550: m += 0.10
-    return max(0.55, min(m, 2.10))
+    return max(0.40, min(m, 2.20))
 
 
 def calculate_tpl_frequency_multiplier_vector(df):
@@ -475,7 +473,7 @@ def calculate_tpl_frequency_multiplier_vector(df):
     is_female = df["gender"].astype(str).str.strip().str.title() == "Female"
     m -= np.where(is_female, 0.10, 0.0)
 
-    urban_fallback_tpl = np.where(df["urban_rural"] == 1, 0.18, -0.12)
+    urban_fallback_tpl = np.where(df["urban_rural"] == 1, 0.30, -0.30)
     if "population_density" in df.columns:
         dens_delta = density_delta_vector(df["population_density"], kind="tpl")
         dens_delta = np.where(pd.isna(dens_delta), urban_fallback_tpl, dens_delta)
@@ -498,7 +496,7 @@ def calculate_tpl_frequency_multiplier_vector(df):
     m += 0.15 * df["traffic_violations"]
     m += np.where(df["annual_mileage"] > 30000, 0.10, 0.0)
     m += np.where(df["credit_score"] < 550, 0.10, 0.0)
-    return m.clip(0.55, 2.10).values
+    return m.clip(0.40, 2.20).values
 
 
 def calculate_tpl_severity_loading(vehicle_type, urban_rural, region, gender):
@@ -506,13 +504,14 @@ def calculate_tpl_severity_loading(vehicle_type, urban_rural, region, gender):
     if str(gender).strip().title() == "Female":
         s *= 0.88
 
-    s += 0.20 if urban_rural == "Urban" else -0.10
+    # Rural has lower severity (less traffic, cheaper legal/medical costs)
+    s += 0.20 if urban_rural == "Urban" else -0.20
 
     if vehicle_type in ("SUV", "Pickup"): s += 0.15
     if vehicle_type == "Minivan":         s += 0.10
 
     if region in ("Khomas", "Erongo"):    s += 0.10
-    return max(0.60, s)
+    return max(0.50, s)
 
 
 def calculate_tpl_severity_loading_vector(df):
@@ -520,11 +519,11 @@ def calculate_tpl_severity_loading_vector(df):
     is_female = df["gender"].astype(str).str.strip().str.title() == "Female"
     s *= np.where(is_female, 0.88, 1.00)
 
-    s += np.where(df["urban_rural"] == 1, 0.20, -0.10)
+    s += np.where(df["urban_rural"] == 1, 0.20, -0.20)
     s += np.where(df["vehicle_type"].isin(["SUV", "Pickup"]), 0.15,
          np.where(df["vehicle_type"] == "Minivan", 0.10, 0.0))
     s += np.where(df["region"].isin(["Khomas", "Erongo"]), 0.10, 0.0)
-    return s.clip(lower=0.60).values
+    return s.clip(lower=0.50).values
 
 
 # ---------- Card render ----------
@@ -573,10 +572,6 @@ def render_card(horizon, cfg, prob=None):
 # BULK INGESTION — TOLERANT OF MISSING COLUMNS
 # ============================================================
 def prepare_bulk_input(df):
-    """
-    Accepts ANY csv/excel. Only rule: file must have at least one row.
-    Missing columns are auto-filled with MODEL_DEFAULTS.
-    """
     df = df.copy()
     df.columns = [str(c).strip().lower() for c in df.columns]
 
@@ -731,27 +726,6 @@ town = st.sidebar.selectbox("Town", TOWNS_BY_REGION[region])
 
 urban_rural = st.sidebar.selectbox("Urban/Rural", ["Urban", "Rural"])
 
-st.sidebar.divider(); st.sidebar.header("Location & Crowding")
-area_km2 = st.sidebar.number_input(
-    "Total Area of Place (km²)", min_value=0.1, max_value=50_000.0,
-    value=10.0, step=0.5,
-    help="Land area of the place where the vehicle is garaged / driven.")
-population = st.sidebar.number_input(
-    "Number of People in Place", min_value=1, max_value=20_000_000,
-    value=30_000, step=1_000,
-    help="Resident population of that place.")
-
-computed_density = compute_population_density(area_km2, population)
-if computed_density is not None:
-    st.sidebar.metric(
-        "Computed Density",
-        f"{computed_density:,.0f} people/km²")
-    st.sidebar.caption(
-        f"≈ {computed_density/1_000_000:.4f} people/m²  ·  "
-        f"Band: **{density_band(computed_density)}**")
-else:
-    st.sidebar.warning("Enter area and population to compute density.")
-
 st.sidebar.divider(); st.sidebar.header("Vehicle")
 vehicle_value = st.sidebar.number_input("Vehicle Value (NAD)", 20_000, 1_500_000, 250_000, step=10_000)
 vehicle_age = st.sidebar.slider("Vehicle Age (yrs)", 0, 25, 5)
@@ -808,7 +782,7 @@ input_df = pd.DataFrame([{
     "telematics_score": telematics_score,
 }])
 
-current_fp = hash(tuple(input_df.iloc[0].astype(str).tolist()) + (area_km2, population))
+current_fp = hash(tuple(input_df.iloc[0].astype(str).tolist()))
 if "input_fingerprint" not in st.session_state:
     st.session_state["input_fingerprint"] = current_fp
 if "last_results" not in st.session_state:
@@ -834,20 +808,21 @@ with tab_single:
     predict_clicked = st.button("Predict Claim Risk", type="primary", use_container_width=True)
 
     if predict_clicked:
+        # Pass density=None to fall back cleanly to Urban/Rural
         od_freq = calculate_od_frequency_multiplier(
             age=age, gender=gender, years_driving=years_driving,
             prior_claims=prior_claims, violations=traffic_violations,
             mileage=annual_mileage, credit_score=credit_score,
             urban_rural=urban_rural, vehicle_age=vehicle_age,
             safety_features=1 if safety_features == "Yes" else 0,
-            density=computed_density,
+            density=None,
         )
         tpl_freq = calculate_tpl_frequency_multiplier(
             age=age, gender=gender, years_driving=years_driving,
             prior_claims=prior_claims, violations=traffic_violations,
             mileage=annual_mileage, credit_score=credit_score,
             urban_rural=urban_rural,
-            density=computed_density,
+            density=None,
         )
 
         new = {}
@@ -877,15 +852,7 @@ with tab_single:
             st.session_state["last_results"] = new
             st.success("Prediction results have been logged to the database.")
             with st.expander("How the risk was assembled"):
-                if computed_density is not None:
-                    st.write(
-                        f"**Crowding:** {computed_density:,.0f} people/km² "
-                        f"({density_band(computed_density)}) — OD Δ "
-                        f"{density_od_delta(computed_density):+.2f}, TPL Δ "
-                        f"{density_tpl_delta(computed_density):+.2f}"
-                    )
-                else:
-                    st.write("**Crowding:** falling back to urban/rural flag.")
+                st.write("**Crowding:** falling back to Urban/Rural flag.")
                 st.write(f"**OD frequency multiplier:** {od_freq:.2f}")
                 st.write(f"**TPL frequency multiplier:** {tpl_freq:.2f}")
 
