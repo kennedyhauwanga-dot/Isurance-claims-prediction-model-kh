@@ -90,7 +90,6 @@ BULK_REQUIRED_COLUMNS = [
 ]
 
 # These are the columns the XGBoost model actually consumes.
-# `policy_id` and `town` are display/audit-only.
 MODEL_FEATURES = [c for c in BULK_REQUIRED_COLUMNS if c not in ("policy_id", "town")]
 
 # Training-median defaults used when a column is missing from the upload.
@@ -551,7 +550,7 @@ def render_card(horizon, cfg, prob=None):
           <div style="font-size:15px;color:#4a5568;font-weight:700;
                       letter-spacing:0.6px;text-transform:uppercase;">Within {horizon}</div>
           <div style="font-size:52px;font-weight:800;color:{cfg['color']};margin:10px 0 4px;">{prob:.1%}</div>
-          <div style="font-size:13px;color:#666;margin-bottom:14px;">Combined likelihood (OD + TPL)</div>
+          <div style="font-size:13px;color:#666;margin-bottom:14px;">Likelihood of a claim</div>
           <div style="display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
             <span style="background:{risk_color};color:#fff;padding:4px 12px;
                 border-radius:20px;font-size:12px;font-weight:600;">{risk}</span>
@@ -577,8 +576,6 @@ def prepare_bulk_input(df):
     """
     Accepts ANY csv/excel. Only rule: file must have at least one row.
     Missing columns are auto-filled with MODEL_DEFAULTS.
-
-    Returns: (prepared_df, error_message_or_None, filled_columns_list)
     """
     df = df.copy()
     df.columns = [str(c).strip().lower() for c in df.columns]
@@ -586,32 +583,27 @@ def prepare_bulk_input(df):
     if df.empty:
         return None, "Uploaded file contains no rows.", []
 
-    # Auto-generate policy_id if absent
     if "policy_id" not in df.columns:
         df["policy_id"] = [f"P{i+1:05d}" for i in range(len(df))]
     else:
         df["policy_id"] = df["policy_id"].astype(str)
 
-    # Fill every missing model column with its training-median default
     filled = []
     for col, default in MODEL_DEFAULTS.items():
         if col not in df.columns:
             df[col] = default
             filled.append(col)
 
-    # Binary categorical → 0/1 (defaults applied when values are unknown/blank)
     for col, mapping in BINARY_MAPS.items():
         default_str = str(MODEL_DEFAULTS[col]).strip().title()
         default_val = mapping.get(default_str, 0)
         df[col] = (df[col].astype(str).str.strip().str.title()
                    .map(mapping).fillna(default_val).astype(int))
 
-    # Numeric columns: coerce + fill NaN with default
     for col in NUMERIC_COLUMNS:
         default_val = MODEL_DEFAULTS.get(col, 0)
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(default_val)
 
-    # Density: area+population preferred; else population_density; else NaN
     area = (pd.to_numeric(df["area_km2"], errors="coerce")
             if "area_km2" in df.columns else pd.Series([np.nan] * len(df)))
     pop  = (pd.to_numeric(df["population"], errors="coerce")
@@ -625,12 +617,10 @@ def prepare_bulk_input(df):
     else:
         df["population_density"] = computed_density
 
-    # Town: keep if provided, else blank display column
     if "town" not in df.columns:
         df["town"] = ""
         filled.append("town")
 
-    # Region: keep if provided, else default
     if "region" not in df.columns:
         df["region"] = MODEL_DEFAULTS["region"]
         filled.append("region")
@@ -660,7 +650,6 @@ def run_bulk_prediction(df, od_severity_rate, tpl_base_severity, safety_loading)
                         * out["od_severity_load"])
     tpl_severity_nad = tpl_base_severity * out["tpl_severity_load"]
 
-    # Only feed the model the features it actually consumes
     X = out[MODEL_FEATURES]
 
     for h, cfg in HORIZONS.items():
@@ -859,19 +848,6 @@ with tab_single:
             min_value=1.00, max_value=2.00, value=1.25, step=0.05,
             help="Prudential margin on top of expected loss.")
 
-    if computed_density is not None:
-        band = density_band(computed_density)
-        od_delta = density_od_delta(computed_density)
-        tpl_delta = density_tpl_delta(computed_density)
-        st.markdown(
-            f"**Crowding:** `{computed_density:,.0f}` people/km²  ·  "
-            f"Band: **{band}**  ·  "
-            f"OD freq Δ `{od_delta:+.2f}`  ·  "
-            f"TPL freq Δ `{tpl_delta:+.2f}`"
-        )
-    else:
-        st.warning("Enter area and population in the sidebar to compute density.")
-
     st.divider()
     st.subheader("Generate Prediction")
     predict_clicked = st.button("Predict Claim Risk", type="primary", use_container_width=True)
@@ -947,7 +923,7 @@ with tab_single:
                 st.write(f"**TPL severity loading:** {tpl_sev_load:.2f}")
 
     results = st.session_state["last_results"]
-    st.markdown("### Predicted Claim Likelihood (Combined OD + TPL)")
+    st.markdown("### Predicted Claim Likelihood")
     c1, c2, c3 = st.columns(3)
     with c1: render_card("3 months",  HORIZONS["3 months"],  results.get("3 months",  {}).get("combined"))
     with c2: render_card("6 months",  HORIZONS["6 months"],  results.get("6 months",  {}).get("combined"))
