@@ -884,8 +884,6 @@ with tab_single:
 with tab_bulk:
     st.subheader("Bulk Policy Risk & Reserve Recommendation")
 
-    # REMOVED the st.info blue box here
-
     template_df = pd.DataFrame([{
         "policy_id": "P0001", "age": 35, "age_group": "Adult", "gender": "Male",
         "marital_status": "Married", "education_level": "Bachelor",
@@ -907,11 +905,8 @@ with tab_bulk:
     }])
     with st.expander("📄 Download reference template (all columns)"):
         st.dataframe(template_df, use_container_width=True, hide_index=True)
-        st.caption(
-            "Missing columns will be **auto-filled** at prediction time — you do "
-            "not have to include everything. `area_km2` + `population` OR "
-            "`population_density` are optional density inputs."
-        )
+        
+        # REMOVED THE CAPTION HERE
         st.download_button("Download template (CSV)",
             data=template_df.to_csv(index=False).encode("utf-8"),
             file_name="bulk_policy_template.csv", mime="text/csv")
