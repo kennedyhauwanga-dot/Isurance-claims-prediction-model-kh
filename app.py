@@ -213,7 +213,7 @@ def check_credentials():
 
     # --- PROFESSIONAL LOGIN HEADER ---
     st.title("Insurance Claim Risk Prediction System")
-    st.markdown("**Secure Access Portal** | University of Namibia Research Thesis by Kennedy N. Hauwanga")
+    st.markdown("**Secure Access Portal** | University of Namibia Research Thesis — Kennedy N. Hauwanga")
     st.divider()
 
     with st.form("login_form", clear_on_submit=False):
@@ -352,9 +352,10 @@ def calculate_od_frequency_multiplier(age, gender, years_driving, prior_claims, 
     elif vehicle_age > 5:     m += 0.05
     if safety_features == 0:  m += 0.10
 
-    if prior_claims == 1:   m += 0.25
-    elif prior_claims == 2: m += 0.45
-    elif prior_claims >= 3: m += 0.70
+    # DAMPENED PRIOR CLAIMS
+    if prior_claims == 1:   m += 0.08
+    elif prior_claims == 2: m += 0.15
+    elif prior_claims >= 3: m += 0.25
 
     if age < 25:   m += 0.15
     elif age > 65: m += 0.10
@@ -386,10 +387,11 @@ def calculate_od_frequency_multiplier_vector(df):
     m += np.where(va > 10, 0.12, np.where(va > 5, 0.05, 0.0))
     m += np.where(df["safety_features"] == 0, 0.10, 0.0)
 
+    # DAMPENED PRIOR CLAIMS
     pc = df["prior_claims"]
-    m += np.where(pc == 1, 0.25,
-         np.where(pc == 2, 0.45,
-         np.where(pc >= 3, 0.70, 0.0)))
+    m += np.where(pc == 1, 0.08,
+         np.where(pc == 2, 0.15,
+         np.where(pc >= 3, 0.25, 0.0)))
 
     age = df["age"]
     m += np.where(age < 25, 0.15, np.where(age > 65, 0.10, 0.0))
@@ -452,9 +454,10 @@ def calculate_tpl_frequency_multiplier(age, gender, years_driving, prior_claims,
     else:
         m += 0.30 if urban_rural == "Urban" else -0.30
 
-    if prior_claims == 1:   m += 0.30
-    elif prior_claims == 2: m += 0.55
-    elif prior_claims >= 3: m += 0.80
+    # DAMPENED PRIOR CLAIMS
+    if prior_claims == 1:   m += 0.10
+    elif prior_claims == 2: m += 0.20
+    elif prior_claims >= 3: m += 0.35
 
     if age < 25:   m += 0.25
     elif age > 65: m += 0.08
@@ -483,10 +486,11 @@ def calculate_tpl_frequency_multiplier_vector(df):
         dens_delta = urban_fallback_tpl
     m += dens_delta
 
+    # DAMPENED PRIOR CLAIMS
     pc = df["prior_claims"]
-    m += np.where(pc == 1, 0.30,
-         np.where(pc == 2, 0.55,
-         np.where(pc >= 3, 0.80, 0.0)))
+    m += np.where(pc == 1, 0.10,
+         np.where(pc == 2, 0.20,
+         np.where(pc >= 3, 0.35, 0.0)))
 
     age = df["age"]
     m += np.where(age < 25, 0.25, np.where(age > 65, 0.08, 0.0))
