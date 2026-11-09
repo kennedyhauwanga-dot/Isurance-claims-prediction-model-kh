@@ -757,6 +757,13 @@ annual_mileage = st.sidebar.number_input("Annual Mileage (km)", 1_000, 100_000, 
 has_telematics = st.sidebar.selectbox("Has Telematics", ["Yes", "No"])
 telematics_score = st.sidebar.slider("Telematics Score", 0, 100, 50)
 
+# ============================================================
+# NEW: DEBUG MODE TOGGLE
+# ============================================================
+st.sidebar.divider()
+st.sidebar.header("Developer Options")
+debug_mode = st.sidebar.checkbox("Show Underwriting Logic (Debug)", value=False)
+
 # ---------- Build single input ----------
 input_df = pd.DataFrame([{
     "age": age, "age_group": age_group, "gender": gender,
@@ -851,10 +858,13 @@ with tab_single:
         if new:
             st.session_state["last_results"] = new
             st.success("Prediction results have been logged to the database.")
-            with st.expander("How the risk was assembled"):
-                st.write("**Crowding:** falling back to Urban/Rural flag.")
-                st.write(f"**OD frequency multiplier:** {od_freq:.2f}")
-                st.write(f"**TPL frequency multiplier:** {tpl_freq:.2f}")
+            
+            # --- HIDDEN BEHIND DEBUG MODE ---
+            if debug_mode:
+                with st.expander("How the risk was assembled (Internal Logic)", expanded=True):
+                    st.write("**Crowding:** falling back to Urban/Rural flag.")
+                    st.write(f"**OD frequency multiplier:** {od_freq:.2f}")
+                    st.write(f"**TPL frequency multiplier:** {tpl_freq:.2f}")
 
     results = st.session_state["last_results"]
     st.markdown("### Predicted Claim Likelihood")
@@ -871,14 +881,26 @@ with tab_single:
             r = results.get(h)
             if not r:
                 continue
-            rows.append({
-                "Horizon": h,
-                "OD Freq ×": f"{r['od_freq']:.2f}",
-                "OD Prob":    f"{r['od_prob']:.2%}",
-                "TPL Freq ×": f"{r['tpl_freq']:.2f}",
-                "TPL Prob":   f"{r['tpl_prob']:.2%}",
-                "Combined Prob": f"{r['combined']:.2%}",
-            })
+            
+            # --- HIDDEN BEHIND DEBUG MODE ---
+            if debug_mode:
+                rows.append({
+                    "Horizon": h,
+                    "OD Freq ×": f"{r['od_freq']:.2f}",
+                    "OD Prob":    f"{r['od_prob']:.2%}",
+                    "TPL Freq ×": f"{r['tpl_freq']:.2f}",
+                    "TPL Prob":   f"{r['tpl_prob']:.2%}",
+                    "Combined Prob": f"{r['combined']:.2%}",
+                })
+            else:
+                # Clean table for regular users
+                rows.append({
+                    "Horizon": h,
+                    "OD Prob":    f"{r['od_prob']:.2%}",
+                    "TPL Prob":   f"{r['tpl_prob']:.2%}",
+                    "Combined Prob": f"{r['combined']:.2%}",
+                })
+                
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 # ============================================================
