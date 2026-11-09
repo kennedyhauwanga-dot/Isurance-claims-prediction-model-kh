@@ -213,7 +213,7 @@ def check_credentials():
 
     # --- PROFESSIONAL LOGIN HEADER ---
     st.title("Insurance Claim Risk Prediction System")
-    st.markdown("**Secure Access Portal** | University of Namibia Research Thesis — Kennedy N. Hauwanga")
+    st.markdown("**Secure Access Portal** | University of Namibia Research Thesis by Kennedy N. Hauwanga")
     st.divider()
 
     with st.form("login_form", clear_on_submit=False):
