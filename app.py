@@ -6,6 +6,11 @@ Author: Kennedy N. Hauwanga (Student No. 218208399)
 Tabs:
   1. Single Policyholder
   2. Bulk Policy File   (upload -> per-policy risk 3M/6M/12M + reserve + portfolio total)
+
+Risk model logic:
+  - Frequency factor adjusts PROBABILITY (prior claims, urban, age, mileage, violations, credit, vehicle age, safety).
+  - Severity factor adjusts RESERVE (vehicle value, vehicle type).
+  - Horizons 3M / 6M / 12M are cumulative windows over the same book and must NOT be summed.
 """
 import os
 import numpy as np
@@ -134,7 +139,6 @@ def check_credentials():
         st.session_state["password"] = ""
         st.session_state["authentication_status"] = None
 
-    # Already authenticated? Let them through.
     if st.session_state.get("authentication_status") is True:
         return True
 
@@ -153,7 +157,6 @@ def check_credentials():
     if submitted:
         verify_login()
         if st.session_state.get("authentication_status") is True:
-            # Scrub the password from session state before rerunning
             st.session_state.pop("password", None)
             st.rerun()
 
@@ -192,59 +195,92 @@ def load_model(path):
     return joblib.load(path)
 
 
-def risk_level(prob):
-    if prob < 0.30:
+def risk_level(prob, threshold):
+    """Aligned with the horizon's own decision threshold so labels and
+    decisions never contradict each other."""
+    if prob < threshold:
         return "Low Risk", "#2e7d32"
-    if prob < 0.60:
+    if prob < 2 * threshold:
         return "Medium Risk", "#f9a825"
     return "High Risk", "#c62828"
 
 
-def calculate_business_risk_adjustment(age, gender, years_driving, prior_claims, violations,
-                                       mileage, credit_score, urban_rural, vehicle_age,
-                                       vehicle_value, vehicle_type):
+# ---------- Frequency adjustment (affects PROBABILITY) ----------
+def calculate_frequency_multiplier(age, years_driving, prior_claims, violations,
+                                   mileage, credit_score, urban_rural, vehicle_age,
+                                   safety_features):
+    """
+    Frequency-only adjustment. Prior claims dominate (strongest actuarial
+    predictor). Bounded to [0.65, 1.65] so it cannot explode the model output.
+    Vehicle value is deliberately EXCLUDED - it is a severity factor.
+    """
     m = 1.0
-    if years_driving < 3: m += 0.4
-    elif years_driving < 8: m += 0.15
-    elif years_driving > 15: m -= 0.25
-    elif years_driving > 10: m -= 0.1
-    m += -0.15 if urban_rural == "Rural" else 0.1
-    if prior_claims == 1: m += 0.3
-    elif prior_claims == 2: m += 0.6
-    elif prior_claims >= 3: m += 1.0
-    if age < 25: m += 0.25
-    elif age > 65: m += 0.1
-    if violations > 0: m += (0.15 * violations)
-    if mileage > 30000: m += 0.2
-    if credit_score < 550: m += 0.15
-    if vehicle_age > 10: m += 0.15
-    if vehicle_value > 500000: m += 0.1
-    if vehicle_type in ["Pickup", "SUV"]: m += 0.05
-    return max(0.2, min(m, 3.0))
+    if years_driving < 3:    m += 0.30
+    elif years_driving < 8:  m += 0.10
+    elif years_driving > 15: m -= 0.15
+    elif years_driving > 10: m -= 0.05
+
+    m += 0.10 if urban_rural == "Urban" else -0.10
+
+    if prior_claims == 1:   m += 0.25
+    elif prior_claims == 2: m += 0.45
+    elif prior_claims >= 3: m += 0.70
+
+    if age < 25:   m += 0.20
+    elif age > 65: m += 0.08
+
+    m += 0.10 * violations
+
+    if mileage > 30000:      m += 0.12
+    if credit_score < 550:   m += 0.10
+    if vehicle_age > 10:     m += 0.10
+    if safety_features == 0: m += 0.08
+
+    return max(0.65, min(m, 1.65))
 
 
-def calculate_business_risk_adjustment_vector(df):
-    """Vectorised version for bulk prediction."""
+def calculate_frequency_multiplier_vector(df):
     m = pd.Series(1.0, index=df.index)
     yd = df["years_driving"]
-    m += np.where(yd < 3, 0.4,
-         np.where(yd < 8, 0.15,
-         np.where(yd > 15, -0.25,
-         np.where(yd > 10, -0.1, 0.0))))
-    m += np.where(df["urban_rural"] == 1, 0.1, -0.15)
+    m += np.where(yd < 3, 0.30,
+         np.where(yd < 8, 0.10,
+         np.where(yd > 15, -0.15,
+         np.where(yd > 10, -0.05, 0.0))))
+    m += np.where(df["urban_rural"] == 1, 0.10, -0.10)
     pc = df["prior_claims"]
-    m += np.where(pc == 1, 0.3,
-         np.where(pc == 2, 0.6,
-         np.where(pc >= 3, 1.0, 0.0)))
+    m += np.where(pc == 1, 0.25,
+         np.where(pc == 2, 0.45,
+         np.where(pc >= 3, 0.70, 0.0)))
     age = df["age"]
-    m += np.where(age < 25, 0.25, np.where(age > 65, 0.1, 0.0))
-    m += 0.15 * df["traffic_violations"]
-    m += np.where(df["annual_mileage"] > 30000, 0.2, 0.0)
-    m += np.where(df["credit_score"] < 550, 0.15, 0.0)
-    m += np.where(df["vehicle_age"] > 10, 0.15, 0.0)
-    m += np.where(df["vehicle_value"] > 500000, 0.1, 0.0)
-    m += np.where(df["vehicle_type"].isin(["Pickup", "SUV"]), 0.05, 0.0)
-    return m.clip(0.2, 3.0).values
+    m += np.where(age < 25, 0.20, np.where(age > 65, 0.08, 0.0))
+    m += 0.10 * df["traffic_violations"]
+    m += np.where(df["annual_mileage"] > 30000, 0.12, 0.0)
+    m += np.where(df["credit_score"] < 550, 0.10, 0.0)
+    m += np.where(df["vehicle_age"] > 10, 0.10, 0.0)
+    m += np.where(df["safety_features"] == 0, 0.08, 0.0)
+    return m.clip(0.65, 1.65).values
+
+
+# ---------- Severity loading (affects RESERVE, not probability) ----------
+def calculate_severity_loading(vehicle_value, vehicle_type):
+    """Repair-cost loading. Higher-value vehicles cost more per claim."""
+    s = 1.0
+    if vehicle_value > 750_000:   s += 0.30
+    elif vehicle_value > 500_000: s += 0.20
+    elif vehicle_value > 300_000: s += 0.10
+    if vehicle_type in ("SUV", "Pickup"):
+        s += 0.10
+    return s
+
+
+def calculate_severity_loading_vector(df):
+    s = pd.Series(1.0, index=df.index)
+    vv = df["vehicle_value"]
+    s += np.where(vv > 750_000, 0.30,
+         np.where(vv > 500_000, 0.20,
+         np.where(vv > 300_000, 0.10, 0.0)))
+    s += np.where(df["vehicle_type"].isin(["SUV", "Pickup"]), 0.10, 0.0)
+    return s.values
 
 
 def render_card(horizon, cfg, prob=None):
@@ -259,7 +295,7 @@ def render_card(horizon, cfg, prob=None):
               <div style="font-size:13px;color:#94a3b8;">Click <b>Predict Claim Risk</b> to generate</div>
             </div>""", unsafe_allow_html=True)
         return
-    risk, risk_color = risk_level(prob)
+    risk, risk_color = risk_level(prob, cfg["threshold"])
     decision = "Claim Likely" if prob >= cfg["threshold"] else "No Claim"
     decision_color = "#c62828" if prob >= cfg["threshold"] else "#2e7d32"
     left_pct = min(max(prob * 100, 0), 100)
@@ -336,26 +372,30 @@ def run_bulk_prediction(df, severity_rate, safety_loading):
             raise FileNotFoundError(f"Model file `{cfg['file']}` not found for {h}.")
 
     out = df.copy()
-    out["risk_multiplier"] = calculate_business_risk_adjustment_vector(df)
+
+    # Frequency and severity handled as separate dimensions
+    out["frequency_multiplier"] = calculate_frequency_multiplier_vector(df)
+    out["severity_loading"]     = calculate_severity_loading_vector(df)
 
     model_input_cols = [c for c in BULK_REQUIRED_COLUMNS if c != "policy_id"]
     X = out[model_input_cols]
 
-    severity = out["vehicle_value"].astype(float) * severity_rate
+    # Severity in NAD, adjusted for repair cost of the vehicle class
+    severity = (out["vehicle_value"].astype(float)
+                * severity_rate
+                * out["severity_loading"])
 
     for h, cfg in HORIZONS.items():
         base = models[h].predict_proba(X)[:, 1]
-        adj = np.minimum(base * out["risk_multiplier"].values, 0.999)
+        adj = np.minimum(base * out["frequency_multiplier"].values, 0.95)
         short = cfg["short"]
         out[f"{short}_probability"] = adj
-        out[f"{short}_risk_level"] = [risk_level(p)[0] for p in adj]
-        out[f"{short}_decision"] = np.where(adj >= cfg["threshold"], "Claim", "No Claim")
-        out[f"{short}_reserve"] = (adj * severity * safety_loading).round(2)
+        out[f"{short}_risk_level"]  = [risk_level(p, cfg["threshold"])[0] for p in adj]
+        out[f"{short}_decision"]    = np.where(adj >= cfg["threshold"], "Claim", "No Claim")
+        out[f"{short}_reserve"]     = (adj * severity * safety_loading).round(2)
 
-    out["total_reserve"] = (
-        out["3M_reserve"] + out["6M_reserve"] + out["12M_reserve"]
-    ).round(2)
-
+    # Cumulative horizons overlap - use the longest window as the reserve to hold.
+    out["total_reserve"] = out["12M_reserve"].round(2)
     return out
 
 
@@ -366,8 +406,8 @@ def portfolio_summary(enriched):
         total = enriched[f"{short}_reserve"].sum()
         avg = enriched[f"{short}_reserve"].mean()
         high_n = (enriched[f"{short}_risk_level"] == "High Risk").sum()
-        med_n = (enriched[f"{short}_risk_level"] == "Medium Risk").sum()
-        low_n = (enriched[f"{short}_risk_level"] == "Low Risk").sum()
+        med_n  = (enriched[f"{short}_risk_level"] == "Medium Risk").sum()
+        low_n  = (enriched[f"{short}_risk_level"] == "Low Risk").sum()
         claim_n = (enriched[f"{short}_decision"] == "Claim").sum()
         rows.append({
             "Horizon": h,
@@ -384,10 +424,10 @@ def portfolio_summary(enriched):
 # ---------- Sidebar Callbacks ----------
 def update_age_group():
     a = st.session_state.policyholder_age
-    if a < 25: st.session_state.age_grp = "Young"
+    if a < 25:   st.session_state.age_grp = "Young"
     elif a < 40: st.session_state.age_grp = "Adult"
     elif a < 60: st.session_state.age_grp = "Middle-Aged"
-    else: st.session_state.age_grp = "Senior"
+    else:        st.session_state.age_grp = "Senior"
 
 
 if 'age_grp' not in st.session_state:
@@ -498,20 +538,27 @@ with tab_single:
     predict_clicked = st.button("Predict Claim Risk", type="primary", use_container_width=True)
 
     if predict_clicked:
-        rmul = calculate_business_risk_adjustment(
-            age=age, gender=gender, years_driving=years_driving,
-            prior_claims=prior_claims, violations=traffic_violations,
-            mileage=annual_mileage, credit_score=credit_score,
-            urban_rural=urban_rural, vehicle_age=vehicle_age,
-            vehicle_value=vehicle_value, vehicle_type=vehicle_type,
+        freq_mult = calculate_frequency_multiplier(
+            age=age,
+            years_driving=years_driving,
+            prior_claims=prior_claims,
+            violations=traffic_violations,
+            mileage=annual_mileage,
+            credit_score=credit_score,
+            urban_rural=urban_rural,
+            vehicle_age=vehicle_age,
+            safety_features=1 if safety_features == "Yes" else 0,
         )
+        sev_load = calculate_severity_loading(vehicle_value, vehicle_type)
+
         new = {}
         for h, cfg in HORIZONS.items():
             if MODELS.get(h) is None:
-                st.warning(f"Model file `{cfg['file']}` not found. Skipping {h}."); continue
+                st.warning(f"Model file `{cfg['file']}` not found. Skipping {h}.")
+                continue
             try:
                 base = float(MODELS[h].predict_proba(input_df)[0, 1])
-                adj = min(base * rmul, 0.999)
+                adj = min(base * freq_mult, 0.95)
                 new[h] = adj
                 decision = "Claim" if adj >= cfg["threshold"] else "No Claim"
                 log_prediction(age=age, gender=gender, vehicle_val=vehicle_value,
@@ -519,9 +566,15 @@ with tab_single:
                                decision=decision, prob=adj)
             except Exception as e:
                 st.warning(f"Prediction failed for `{h}`: {e}")
+
         if new:
             st.session_state["last_results"] = new
             st.success("Prediction results have been logged to the database.")
+            with st.expander("How the risk was assembled"):
+                st.write(f"**Frequency multiplier:** {freq_mult:.2f}")
+                st.write(f"**Severity loading:** {sev_load:.2f}")
+                st.write("Reserve per horizon = probability × vehicle_value × "
+                         "severity_rate × severity_loading × safety_loading.")
 
     results = st.session_state["last_results"]
     st.markdown("### Predicted Claim Likelihood")
@@ -533,19 +586,25 @@ with tab_single:
     if results:
         st.divider(); st.subheader("Summary")
         summary = pd.DataFrame({
-            "3 months": [f"{results.get('3 months',0):.2%}",
-                         risk_level(results.get('3 months',0))[0],
-                         "Claim" if results.get('3 months',0)>=HORIZONS['3 months']['threshold'] else "No Claim",
-                         f"{HORIZONS['3 months']['threshold']:.2f}"],
-            "6 months": [f"{results.get('6 months',0):.2%}",
-                         risk_level(results.get('6 months',0))[0],
-                         "Claim" if results.get('6 months',0)>=HORIZONS['6 months']['threshold'] else "No Claim",
-                         f"{HORIZONS['6 months']['threshold']:.2f}"],
-            "12 months": [f"{results.get('12 months',0):.2%}",
-                          risk_level(results.get('12 months',0))[0],
-                          "Claim" if results.get('12 months',0)>=HORIZONS['12 months']['threshold'] else "No Claim",
-                          f"{HORIZONS['12 months']['threshold']:.2f}"],
-        }, index=["Probability","Risk Level","Decision","Threshold"])
+            "3 months": [
+                f"{results.get('3 months',0):.2%}",
+                risk_level(results.get('3 months',0), HORIZONS['3 months']['threshold'])[0],
+                "Claim" if results.get('3 months',0)>=HORIZONS['3 months']['threshold'] else "No Claim",
+                f"{HORIZONS['3 months']['threshold']:.2f}",
+            ],
+            "6 months": [
+                f"{results.get('6 months',0):.2%}",
+                risk_level(results.get('6 months',0), HORIZONS['6 months']['threshold'])[0],
+                "Claim" if results.get('6 months',0)>=HORIZONS['6 months']['threshold'] else "No Claim",
+                f"{HORIZONS['6 months']['threshold']:.2f}",
+            ],
+            "12 months": [
+                f"{results.get('12 months',0):.2%}",
+                risk_level(results.get('12 months',0), HORIZONS['12 months']['threshold'])[0],
+                "Claim" if results.get('12 months',0)>=HORIZONS['12 months']['threshold'] else "No Claim",
+                f"{HORIZONS['12 months']['threshold']:.2f}",
+            ],
+        }, index=["Probability", "Risk Level", "Decision", "Threshold"])
         st.dataframe(summary, use_container_width=True)
 
 # ============================================================
@@ -583,7 +642,7 @@ with tab_bulk:
 
     st.divider()
     uploaded = st.file_uploader("Upload policy file (CSV or Excel)",
-                                type=["csv","xlsx","xls"], key="bulk_upload")
+                                type=["csv", "xlsx", "xls"], key="bulk_upload")
 
     st.markdown("#### Reserve Assumptions")
     ca, cb = st.columns(2)
@@ -627,19 +686,23 @@ with tab_bulk:
         enriched = st.session_state["bulk_results"]
         st.divider()
 
-        st.subheader("Portfolio Reserve — Total Amount the Insurer Should Hold")
-        total_3m = enriched["3M_reserve"].sum()
-        total_6m = enriched["6M_reserve"].sum()
+        st.subheader("Portfolio Reserve Ladder")
+        st.caption(
+            "3M, 6M and 12M horizons are cumulative windows over the same book. "
+            "They must NOT be added. The 12M figure is the amount to hold for the "
+            "full 12-month horizon."
+        )
+
+        total_3m  = enriched["3M_reserve"].sum()
+        total_6m  = enriched["6M_reserve"].sum()
         total_12m = enriched["12M_reserve"].sum()
-        grand_total = enriched["total_reserve"].sum()
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Policies", f"{len(enriched):,}")
-        m2.metric("Reserve @ 3M", f"NAD {total_3m:,.0f}")
-        m3.metric("Reserve @ 6M", f"NAD {total_6m:,.0f}")
-        m4.metric("Reserve @ 12M", f"NAD {total_12m:,.0f}")
-        st.metric("Grand Total Reserve (3M + 6M + 12M combined)",
-                  f"NAD {grand_total:,.2f}")
+        m2.metric("Reserve @ 3M horizon", f"NAD {total_3m:,.0f}")
+        m3.metric("Reserve @ 6M horizon", f"NAD {total_6m:,.0f}")
+        m4.metric("Reserve @ 12M horizon", f"NAD {total_12m:,.0f}",
+                  help="Cumulative expected loss over 12 months - the solvency figure.")
 
         st.markdown("##### Breakdown by Horizon")
         st.dataframe(portfolio_summary(enriched), use_container_width=True, hide_index=True)
