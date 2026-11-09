@@ -7,10 +7,11 @@ Tabs:
   1. Single Policyholder
   2. Bulk Policy File   (upload -> per-policy risk 3M/6M/12M + reserve + portfolio total)
 
-Risk model logic:
-  - Frequency factor adjusts PROBABILITY (prior claims, urban, age, mileage, violations, credit, vehicle age, safety).
-  - Severity factor adjusts RESERVE (vehicle value, vehicle type).
-  - Horizons 3M / 6M / 12M are cumulative windows over the same book and must NOT be summed.
+Bulk files are TOLERANT of missing columns:
+  - Only `policy_id` is generated if absent.
+  - All other model columns fall back to training-median defaults.
+  - Density: prefers area_km2 + population, else population_density,
+    else falls back to urban_rural inside the adjustment layer.
 """
 import os
 import numpy as np
@@ -45,6 +46,85 @@ HORIZONS = {
     "6 months":  {"file": "xgb_6M.joblib",  "threshold": 0.22, "color": "#f57c00", "short": "6M"},
     "12 months": {"file": "xgb_12M.joblib", "threshold": 0.12, "color": "#388e3c", "short": "12M"},
 }
+
+OD_CLAIM_SHARE  = 0.65
+TPL_CLAIM_SHARE = 0.35
+
+# ---------- Region & Town data (official) ----------
+REGIONS = [
+    "Erongo", "Hardap", "ǁKaras", "Kavango East", "Kavango West",
+    "Khomas", "Kunene", "Ohangwena", "Omaheke", "Omusati",
+    "Oshana", "Oshikoto", "Otjozondjupa", "Zambezi"
+]
+
+TOWNS_BY_REGION = {
+    "Erongo": ["Arandis", "Henties Bay", "Karibib", "Omaruru", "Swakopmund", "Usakos", "Walvis Bay"],
+    "Hardap": ["Aranos", "Mariental", "Rehoboth"],
+    "ǁKaras": ["Karasburg", "Keetmanshoop", "Lüderitz", "Oranjemund"],
+    "Kavango East": ["Rundu"],
+    "Kavango West": ["Nkurenkuru"],
+    "Khomas": ["Windhoek"],
+    "Kunene": ["Khorixas", "Opuwo", "Outjo"],
+    "Ohangwena": ["Eenhana", "Helao Nafidi"],
+    "Omaheke": ["Gobabis"],
+    "Omusati": ["Okahao", "Oshikuku", "Outapi", "Ruacana"],
+    "Oshana": ["Ondangwa", "Ongwediva", "Oshakati"],
+    "Oshikoto": ["Omuthiya", "Oniipa", "Tsumeb"],
+    "Otjozondjupa": ["Grootfontein", "Okahandja", "Okakarara", "Otavi", "Otjiwarongo"],
+    "Zambezi": ["Katima Mulilo"],
+}
+
+# ============================================================
+# SCHEMA + DEFAULTS
+# ============================================================
+BULK_REQUIRED_COLUMNS = [
+    "policy_id", "age", "age_group", "gender", "marital_status", "education_level",
+    "employment_status", "income_level", "home_ownership", "region", "town",
+    "urban_rural", "vehicle_value", "vehicle_age", "vehicle_age_group",
+    "engine_capacity", "vehicle_weight", "vehicle_type", "vehicle_brand",
+    "fuel_type", "transmission", "vehicle_usage", "safety_features",
+    "premium_amount", "deductible", "bonus_malus", "policy_type",
+    "payment_frequency", "policy_duration_years", "years_driving",
+    "prior_claims", "prior_claim_amount", "traffic_violations",
+    "credit_score", "annual_mileage", "has_telematics", "telematics_score",
+]
+
+# These are the columns the XGBoost model actually consumes.
+# `policy_id` and `town` are display/audit-only.
+MODEL_FEATURES = [c for c in BULK_REQUIRED_COLUMNS if c not in ("policy_id", "town")]
+
+# Training-median defaults used when a column is missing from the upload.
+MODEL_DEFAULTS = {
+    "age": 35, "age_group": "Adult", "gender": "Male",
+    "marital_status": "Married", "education_level": "Bachelor",
+    "employment_status": "Employed", "income_level": "Medium",
+    "home_ownership": "Own", "region": "Khomas",
+    "urban_rural": "Urban",
+    "vehicle_value": 250000, "vehicle_age": 5, "vehicle_age_group": "Recent",
+    "engine_capacity": 2000, "vehicle_weight": 1500,
+    "vehicle_type": "Sedan", "vehicle_brand": "Toyota",
+    "fuel_type": "Petrol", "transmission": "Manual",
+    "vehicle_usage": "Private", "safety_features": "Yes",
+    "premium_amount": 15000, "deductible": 5000, "bonus_malus": 0,
+    "policy_type": "Comprehensive", "payment_frequency": "Monthly",
+    "policy_duration_years": 3, "years_driving": 15,
+    "prior_claims": 0, "prior_claim_amount": 0,
+    "traffic_violations": 0, "credit_score": 650, "annual_mileage": 20000,
+    "has_telematics": "Yes", "telematics_score": 50,
+}
+
+BINARY_MAPS = {
+    "urban_rural": {"Urban": 1, "Rural": 0},
+    "safety_features": {"Yes": 1, "No": 0},
+    "has_telematics": {"Yes": 1, "No": 0},
+}
+
+NUMERIC_COLUMNS = [
+    "age", "vehicle_value", "vehicle_age", "engine_capacity", "vehicle_weight",
+    "premium_amount", "deductible", "bonus_malus", "policy_duration_years",
+    "years_driving", "prior_claims", "prior_claim_amount", "traffic_violations",
+    "credit_score", "annual_mileage", "telematics_score",
+]
 
 # ---------- Database ----------
 DB_FILE = os.path.join(os.path.expanduser("~"), "predictions.db")
@@ -120,12 +200,6 @@ init_db()
 
 # ---------- Authentication ----------
 def check_credentials():
-    """
-    Fixed login flow:
-      - Uses st.form so the submit button reads the full, current widget values atomically.
-      - No per-keystroke on_change callbacks interfering with session state.
-      - Calls st.rerun() after a successful login so the app unlocks on the FIRST click.
-    """
     def verify_login():
         username_ok = st.session_state.get("username", "") == "khauwanga"
         password_ok = st.session_state.get("password", "") == "University@4201"
@@ -191,13 +265,7 @@ def warm_models():
 MODELS = warm_models()
 
 # ---------- Helpers ----------
-def load_model(path):
-    return joblib.load(path)
-
-
 def risk_level(prob, threshold):
-    """Aligned with the horizon's own decision threshold so labels and
-    decisions never contradict each other."""
     if prob < threshold:
         return "Low Risk", "#2e7d32"
     if prob < 2 * threshold:
@@ -205,84 +273,262 @@ def risk_level(prob, threshold):
     return "High Risk", "#c62828"
 
 
-# ---------- Frequency adjustment (affects PROBABILITY) ----------
-def calculate_frequency_multiplier(age, years_driving, prior_claims, violations,
-                                   mileage, credit_score, urban_rural, vehicle_age,
-                                   safety_features):
-    """
-    Frequency-only adjustment. Prior claims dominate (strongest actuarial
-    predictor). Bounded to [0.65, 1.65] so it cannot explode the model output.
-    Vehicle value is deliberately EXCLUDED - it is a severity factor.
-    """
-    m = 1.0
-    if years_driving < 3:    m += 0.30
-    elif years_driving < 8:  m += 0.10
-    elif years_driving > 15: m -= 0.15
-    elif years_driving > 10: m -= 0.05
+# ============================================================
+# CROWDING / DENSITY
+# ============================================================
+def compute_population_density(area_km2, population):
+    try:
+        a = float(area_km2)
+        p = float(population)
+        if a <= 0 or p <= 0:
+            return None
+        return p / a
+    except (TypeError, ValueError):
+        return None
 
-    m += 0.10 if urban_rural == "Urban" else -0.10
+
+def density_band(density):
+    if density is None:
+        return "Unknown"
+    if density < 500:    return "Sparse / Rural"
+    if density < 1500:   return "Suburban"
+    if density < 3000:   return "Urban"
+    if density < 6000:   return "Dense Urban"
+    if density < 12000:  return "Very Dense"
+    return "Hyper-Dense"
+
+
+def density_od_delta(density):
+    if density is None:
+        return None
+    if density < 500:    return -0.05
+    if density < 1500:   return  0.00
+    if density < 3000:   return  0.06
+    if density < 6000:   return  0.12
+    if density < 12000:  return  0.18
+    return 0.25
+
+
+def density_tpl_delta(density):
+    if density is None:
+        return None
+    if density < 500:    return -0.10
+    if density < 1500:   return  0.00
+    if density < 3000:   return  0.12
+    if density < 6000:   return  0.22
+    if density < 12000:  return  0.35
+    return 0.50
+
+
+def density_delta_vector(series, kind="tpl"):
+    dens = pd.to_numeric(series, errors="coerce")
+    if kind == "od":
+        breaks = [-np.inf, 500, 1500, 3000, 6000, 12000, np.inf]
+        values = [-0.05, 0.00, 0.06, 0.12, 0.18, 0.25]
+    else:
+        breaks = [-np.inf, 500, 1500, 3000, 6000, 12000, np.inf]
+        values = [-0.10, 0.00, 0.12, 0.22, 0.35, 0.50]
+    return np.select(
+        [(dens >= breaks[i]) & (dens < breaks[i + 1]) for i in range(len(values))],
+        values,
+        default=np.nan,
+    )
+
+
+# ============================================================
+# OWN DAMAGE — frequency & severity
+# ============================================================
+def calculate_od_frequency_multiplier(age, gender, years_driving, prior_claims, violations,
+                                      mileage, credit_score, urban_rural, vehicle_age,
+                                      safety_features, density=None):
+    m = 1.0
+    if str(gender).strip().title() == "Female":
+        m -= 0.10
+
+    if density is not None:
+        m += density_od_delta(density)
+    else:
+        m += 0.08 if urban_rural == "Urban" else -0.05
+
+    if vehicle_age > 10:      m += 0.12
+    elif vehicle_age > 5:     m += 0.05
+    if safety_features == 0:  m += 0.10
 
     if prior_claims == 1:   m += 0.25
     elif prior_claims == 2: m += 0.45
     elif prior_claims >= 3: m += 0.70
 
-    if age < 25:   m += 0.20
-    elif age > 65: m += 0.08
+    if age < 25:   m += 0.15
+    elif age > 65: m += 0.10
 
-    m += 0.10 * violations
+    if years_driving < 3:    m += 0.15
+    elif years_driving < 8:  m += 0.05
+    elif years_driving > 15: m -= 0.10
 
-    if mileage > 30000:      m += 0.12
-    if credit_score < 550:   m += 0.10
-    if vehicle_age > 10:     m += 0.10
-    if safety_features == 0: m += 0.08
-
-    return max(0.65, min(m, 1.65))
+    if mileage > 30000:    m += 0.12
+    if credit_score < 550: m += 0.08
+    if violations > 0:     m += 0.05 * violations
+    return max(0.60, min(m, 1.90))
 
 
-def calculate_frequency_multiplier_vector(df):
+def calculate_od_frequency_multiplier_vector(df):
     m = pd.Series(1.0, index=df.index)
-    yd = df["years_driving"]
-    m += np.where(yd < 3, 0.30,
-         np.where(yd < 8, 0.10,
-         np.where(yd > 15, -0.15,
-         np.where(yd > 10, -0.05, 0.0))))
-    m += np.where(df["urban_rural"] == 1, 0.10, -0.10)
+    is_female = df["gender"].astype(str).str.strip().str.title() == "Female"
+    m -= np.where(is_female, 0.10, 0.0)
+
+    urban_fallback_od = np.where(df["urban_rural"] == 1, 0.08, -0.05)
+    if "population_density" in df.columns:
+        dens_delta = density_delta_vector(df["population_density"], kind="od")
+        dens_delta = np.where(pd.isna(dens_delta), urban_fallback_od, dens_delta)
+    else:
+        dens_delta = urban_fallback_od
+    m += dens_delta
+
+    va = df["vehicle_age"]
+    m += np.where(va > 10, 0.12, np.where(va > 5, 0.05, 0.0))
+    m += np.where(df["safety_features"] == 0, 0.10, 0.0)
+
     pc = df["prior_claims"]
     m += np.where(pc == 1, 0.25,
          np.where(pc == 2, 0.45,
          np.where(pc >= 3, 0.70, 0.0)))
+
     age = df["age"]
-    m += np.where(age < 25, 0.20, np.where(age > 65, 0.08, 0.0))
-    m += 0.10 * df["traffic_violations"]
+    m += np.where(age < 25, 0.15, np.where(age > 65, 0.10, 0.0))
+    yd = df["years_driving"]
+    m += np.where(yd < 3, 0.15,
+         np.where(yd < 8, 0.05,
+         np.where(yd > 15, -0.10, 0.0)))
+
     m += np.where(df["annual_mileage"] > 30000, 0.12, 0.0)
-    m += np.where(df["credit_score"] < 550, 0.10, 0.0)
-    m += np.where(df["vehicle_age"] > 10, 0.10, 0.0)
-    m += np.where(df["safety_features"] == 0, 0.08, 0.0)
-    return m.clip(0.65, 1.65).values
+    m += np.where(df["credit_score"] < 550, 0.08, 0.0)
+    m += 0.05 * df["traffic_violations"]
+    return m.clip(0.60, 1.90).values
 
 
-# ---------- Severity loading (affects RESERVE, not probability) ----------
-def calculate_severity_loading(vehicle_value, vehicle_type):
-    """Repair-cost loading. Higher-value vehicles cost more per claim."""
+def calculate_od_severity_loading(vehicle_value, vehicle_type, vehicle_age, gender):
     s = 1.0
-    if vehicle_value > 750_000:   s += 0.30
-    elif vehicle_value > 500_000: s += 0.20
-    elif vehicle_value > 300_000: s += 0.10
-    if vehicle_type in ("SUV", "Pickup"):
-        s += 0.10
-    return s
+    if str(gender).strip().title() == "Female":
+        s *= 0.90
+
+    if vehicle_value > 750_000:   s += 0.50
+    elif vehicle_value > 500_000: s += 0.35
+    elif vehicle_value > 300_000: s += 0.20
+    elif vehicle_value > 150_000: s += 0.10
+
+    if vehicle_type in ("SUV", "Pickup"): s += 0.10
+
+    if vehicle_age > 15:   s -= 0.20
+    elif vehicle_age > 10: s -= 0.10
+    return max(0.50, s)
 
 
-def calculate_severity_loading_vector(df):
+def calculate_od_severity_loading_vector(df):
     s = pd.Series(1.0, index=df.index)
+    is_female = df["gender"].astype(str).str.strip().str.title() == "Female"
+    s *= np.where(is_female, 0.90, 1.00)
+
     vv = df["vehicle_value"]
-    s += np.where(vv > 750_000, 0.30,
-         np.where(vv > 500_000, 0.20,
-         np.where(vv > 300_000, 0.10, 0.0)))
+    s += np.where(vv > 750_000, 0.50,
+         np.where(vv > 500_000, 0.35,
+         np.where(vv > 300_000, 0.20,
+         np.where(vv > 150_000, 0.10, 0.0))))
     s += np.where(df["vehicle_type"].isin(["SUV", "Pickup"]), 0.10, 0.0)
-    return s.values
+    va = df["vehicle_age"]
+    s -= np.where(va > 15, 0.20, np.where(va > 10, 0.10, 0.0))
+    return s.clip(lower=0.50).values
 
 
+# ============================================================
+# THIRD-PARTY LIABILITY — frequency & severity
+# ============================================================
+def calculate_tpl_frequency_multiplier(age, gender, years_driving, prior_claims, violations,
+                                       mileage, credit_score, urban_rural, density=None):
+    m = 1.0
+    if str(gender).strip().title() == "Female":
+        m -= 0.10
+
+    if density is not None:
+        m += density_tpl_delta(density)
+    else:
+        m += 0.18 if urban_rural == "Urban" else -0.12
+
+    if prior_claims == 1:   m += 0.30
+    elif prior_claims == 2: m += 0.55
+    elif prior_claims >= 3: m += 0.80
+
+    if age < 25:   m += 0.25
+    elif age > 65: m += 0.08
+
+    if years_driving < 3:    m += 0.30
+    elif years_driving < 8:  m += 0.10
+    elif years_driving > 15: m -= 0.15
+
+    m += 0.15 * violations
+
+    if mileage > 30000:    m += 0.10
+    if credit_score < 550: m += 0.10
+    return max(0.55, min(m, 2.10))
+
+
+def calculate_tpl_frequency_multiplier_vector(df):
+    m = pd.Series(1.0, index=df.index)
+    is_female = df["gender"].astype(str).str.strip().str.title() == "Female"
+    m -= np.where(is_female, 0.10, 0.0)
+
+    urban_fallback_tpl = np.where(df["urban_rural"] == 1, 0.18, -0.12)
+    if "population_density" in df.columns:
+        dens_delta = density_delta_vector(df["population_density"], kind="tpl")
+        dens_delta = np.where(pd.isna(dens_delta), urban_fallback_tpl, dens_delta)
+    else:
+        dens_delta = urban_fallback_tpl
+    m += dens_delta
+
+    pc = df["prior_claims"]
+    m += np.where(pc == 1, 0.30,
+         np.where(pc == 2, 0.55,
+         np.where(pc >= 3, 0.80, 0.0)))
+
+    age = df["age"]
+    m += np.where(age < 25, 0.25, np.where(age > 65, 0.08, 0.0))
+    yd = df["years_driving"]
+    m += np.where(yd < 3, 0.30,
+         np.where(yd < 8, 0.10,
+         np.where(yd > 15, -0.15, 0.0)))
+
+    m += 0.15 * df["traffic_violations"]
+    m += np.where(df["annual_mileage"] > 30000, 0.10, 0.0)
+    m += np.where(df["credit_score"] < 550, 0.10, 0.0)
+    return m.clip(0.55, 2.10).values
+
+
+def calculate_tpl_severity_loading(vehicle_type, urban_rural, region, gender):
+    s = 1.0
+    if str(gender).strip().title() == "Female":
+        s *= 0.88
+
+    s += 0.20 if urban_rural == "Urban" else -0.10
+
+    if vehicle_type in ("SUV", "Pickup"): s += 0.15
+    if vehicle_type == "Minivan":         s += 0.10
+
+    if region in ("Khomas", "Erongo"):    s += 0.10
+    return max(0.60, s)
+
+
+def calculate_tpl_severity_loading_vector(df):
+    s = pd.Series(1.0, index=df.index)
+    is_female = df["gender"].astype(str).str.strip().str.title() == "Female"
+    s *= np.where(is_female, 0.88, 1.00)
+
+    s += np.where(df["urban_rural"] == 1, 0.20, -0.10)
+    s += np.where(df["vehicle_type"].isin(["SUV", "Pickup"]), 0.15,
+         np.where(df["vehicle_type"] == "Minivan", 0.10, 0.0))
+    s += np.where(df["region"].isin(["Khomas", "Erongo"]), 0.10, 0.0)
+    return s.clip(lower=0.60).values
+
+
+# ---------- Card render ----------
 def render_card(horizon, cfg, prob=None):
     if prob is None:
         st.markdown(f"""
@@ -305,7 +551,7 @@ def render_card(horizon, cfg, prob=None):
           <div style="font-size:15px;color:#4a5568;font-weight:700;
                       letter-spacing:0.6px;text-transform:uppercase;">Within {horizon}</div>
           <div style="font-size:52px;font-weight:800;color:{cfg['color']};margin:10px 0 4px;">{prob:.1%}</div>
-          <div style="font-size:13px;color:#666;margin-bottom:14px;">Likelihood of a claim</div>
+          <div style="font-size:13px;color:#666;margin-bottom:14px;">Combined likelihood (OD + TPL)</div>
           <div style="display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
             <span style="background:{risk_color};color:#fff;padding:4px 12px;
                 border-radius:20px;font-size:12px;font-weight:600;">{risk}</span>
@@ -324,48 +570,75 @@ def render_card(horizon, cfg, prob=None):
         </div>""", unsafe_allow_html=True)
 
 
-# ---------- Bulk helpers ----------
-BULK_REQUIRED_COLUMNS = [
-    "policy_id", "age", "age_group", "gender", "marital_status", "education_level",
-    "employment_status", "income_level", "home_ownership", "region",
-    "urban_rural", "vehicle_value", "vehicle_age", "vehicle_age_group",
-    "engine_capacity", "vehicle_weight", "vehicle_type", "vehicle_brand",
-    "fuel_type", "transmission", "vehicle_usage", "safety_features",
-    "premium_amount", "deductible", "bonus_malus", "policy_type",
-    "payment_frequency", "policy_duration_years", "years_driving",
-    "prior_claims", "prior_claim_amount", "traffic_violations",
-    "credit_score", "annual_mileage", "has_telematics", "telematics_score",
-]
-
-
+# ============================================================
+# BULK INGESTION — TOLERANT OF MISSING COLUMNS
+# ============================================================
 def prepare_bulk_input(df):
+    """
+    Accepts ANY csv/excel. Only rule: file must have at least one row.
+    Missing columns are auto-filled with MODEL_DEFAULTS.
+
+    Returns: (prepared_df, error_message_or_None, filled_columns_list)
+    """
     df = df.copy()
-    df.columns = [c.strip().lower() for c in df.columns]
+    df.columns = [str(c).strip().lower() for c in df.columns]
 
-    missing = [c for c in BULK_REQUIRED_COLUMNS if c not in df.columns]
-    if missing:
-        return None, f"Missing columns: **{', '.join(missing)}**. Use the template."
+    if df.empty:
+        return None, "Uploaded file contains no rows.", []
 
-    for col, mapping in {
-        "urban_rural": {"Urban": 1, "Rural": 0},
-        "safety_features": {"Yes": 1, "No": 0},
-        "has_telematics": {"Yes": 1, "No": 0},
-    }.items():
-        df[col] = df[col].astype(str).str.strip().str.title().map(mapping).fillna(0).astype(int)
+    # Auto-generate policy_id if absent
+    if "policy_id" not in df.columns:
+        df["policy_id"] = [f"P{i+1:05d}" for i in range(len(df))]
+    else:
+        df["policy_id"] = df["policy_id"].astype(str)
 
-    numeric_cols = [
-        "age", "vehicle_value", "vehicle_age", "engine_capacity", "vehicle_weight",
-        "premium_amount", "deductible", "bonus_malus", "policy_duration_years",
-        "years_driving", "prior_claims", "prior_claim_amount", "traffic_violations",
-        "credit_score", "annual_mileage", "telematics_score",
-    ]
-    for col in numeric_cols:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+    # Fill every missing model column with its training-median default
+    filled = []
+    for col, default in MODEL_DEFAULTS.items():
+        if col not in df.columns:
+            df[col] = default
+            filled.append(col)
 
-    return df, None
+    # Binary categorical → 0/1 (defaults applied when values are unknown/blank)
+    for col, mapping in BINARY_MAPS.items():
+        default_str = str(MODEL_DEFAULTS[col]).strip().title()
+        default_val = mapping.get(default_str, 0)
+        df[col] = (df[col].astype(str).str.strip().str.title()
+                   .map(mapping).fillna(default_val).astype(int))
+
+    # Numeric columns: coerce + fill NaN with default
+    for col in NUMERIC_COLUMNS:
+        default_val = MODEL_DEFAULTS.get(col, 0)
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(default_val)
+
+    # Density: area+population preferred; else population_density; else NaN
+    area = (pd.to_numeric(df["area_km2"], errors="coerce")
+            if "area_km2" in df.columns else pd.Series([np.nan] * len(df)))
+    pop  = (pd.to_numeric(df["population"], errors="coerce")
+            if "population" in df.columns else pd.Series([np.nan] * len(df)))
+    computed_density = np.where((area > 0) & (pop > 0), pop / area, np.nan)
+
+    if "population_density" in df.columns:
+        existing = pd.to_numeric(df["population_density"], errors="coerce")
+        df["population_density"] = np.where(pd.isna(computed_density),
+                                            existing, computed_density)
+    else:
+        df["population_density"] = computed_density
+
+    # Town: keep if provided, else blank display column
+    if "town" not in df.columns:
+        df["town"] = ""
+        filled.append("town")
+
+    # Region: keep if provided, else default
+    if "region" not in df.columns:
+        df["region"] = MODEL_DEFAULTS["region"]
+        filled.append("region")
+
+    return df, None, filled
 
 
-def run_bulk_prediction(df, severity_rate, safety_loading):
+def run_bulk_prediction(df, od_severity_rate, tpl_base_severity, safety_loading):
     models = MODELS
     for h, cfg in HORIZONS.items():
         if models.get(h) is None:
@@ -373,29 +646,46 @@ def run_bulk_prediction(df, severity_rate, safety_loading):
 
     out = df.copy()
 
-    # Frequency and severity handled as separate dimensions
-    out["frequency_multiplier"] = calculate_frequency_multiplier_vector(df)
-    out["severity_loading"]     = calculate_severity_loading_vector(df)
+    out["od_frequency_mult"]  = calculate_od_frequency_multiplier_vector(df)
+    out["tpl_frequency_mult"] = calculate_tpl_frequency_multiplier_vector(df)
+    out["od_severity_load"]   = calculate_od_severity_loading_vector(df)
+    out["tpl_severity_load"]  = calculate_tpl_severity_loading_vector(df)
 
-    model_input_cols = [c for c in BULK_REQUIRED_COLUMNS if c != "policy_id"]
-    X = out[model_input_cols]
+    out["crowding_band"] = out["population_density"].apply(
+        lambda d: density_band(None if pd.isna(d) else d)
+    )
 
-    # Severity in NAD, adjusted for repair cost of the vehicle class
-    severity = (out["vehicle_value"].astype(float)
-                * severity_rate
-                * out["severity_loading"])
+    od_severity_nad  = (out["vehicle_value"].astype(float)
+                        * od_severity_rate
+                        * out["od_severity_load"])
+    tpl_severity_nad = tpl_base_severity * out["tpl_severity_load"]
+
+    # Only feed the model the features it actually consumes
+    X = out[MODEL_FEATURES]
 
     for h, cfg in HORIZONS.items():
-        base = models[h].predict_proba(X)[:, 1]
-        adj = np.minimum(base * out["frequency_multiplier"].values, 0.95)
         short = cfg["short"]
-        out[f"{short}_probability"] = adj
-        out[f"{short}_risk_level"]  = [risk_level(p, cfg["threshold"])[0] for p in adj]
-        out[f"{short}_decision"]    = np.where(adj >= cfg["threshold"], "Claim", "No Claim")
-        out[f"{short}_reserve"]     = (adj * severity * safety_loading).round(2)
+        base = models[h].predict_proba(X)[:, 1]
 
-    # Cumulative horizons overlap - use the longest window as the reserve to hold.
-    out["total_reserve"] = out["12M_reserve"].round(2)
+        od_prob  = np.minimum(base * OD_CLAIM_SHARE  * out["od_frequency_mult"].values,  0.95)
+        tpl_prob = np.minimum(base * TPL_CLAIM_SHARE * out["tpl_frequency_mult"].values, 0.90)
+
+        od_reserve  = (od_prob  * od_severity_nad  * safety_loading).round(2)
+        tpl_reserve = (tpl_prob * tpl_severity_nad * safety_loading).round(2)
+
+        combined_prob = np.minimum(od_prob + tpl_prob, 0.95)
+
+        out[f"{short}_od_prob"]      = od_prob
+        out[f"{short}_od_reserve"]   = od_reserve
+        out[f"{short}_tpl_prob"]     = tpl_prob
+        out[f"{short}_tpl_reserve"]  = tpl_reserve
+        out[f"{short}_total_prob"]   = combined_prob
+        out[f"{short}_total_reserve"] = (od_reserve + tpl_reserve).round(2)
+        out[f"{short}_risk_level"]   = [risk_level(p, cfg["threshold"])[0] for p in combined_prob]
+        out[f"{short}_decision"]     = np.where(
+            combined_prob >= cfg["threshold"], "Claim", "No Claim")
+
+    out["total_reserve"] = out["12M_total_reserve"].round(2)
     return out
 
 
@@ -403,20 +693,15 @@ def portfolio_summary(enriched):
     rows = []
     for h in HORIZONS:
         short = HORIZONS[h]["short"]
-        total = enriched[f"{short}_reserve"].sum()
-        avg = enriched[f"{short}_reserve"].mean()
-        high_n = (enriched[f"{short}_risk_level"] == "High Risk").sum()
-        med_n  = (enriched[f"{short}_risk_level"] == "Medium Risk").sum()
-        low_n  = (enriched[f"{short}_risk_level"] == "Low Risk").sum()
-        claim_n = (enriched[f"{short}_decision"] == "Claim").sum()
+        od_res  = enriched[f"{short}_od_reserve"].sum()
+        tpl_res = enriched[f"{short}_tpl_reserve"].sum()
+        total   = enriched[f"{short}_total_reserve"].sum()
         rows.append({
             "Horizon": h,
-            "Policies Flagged as Claim": int(claim_n),
-            "High Risk": int(high_n),
-            "Medium Risk": int(med_n),
-            "Low Risk": int(low_n),
-            "Total Reserve (NAD)": f"{total:,.2f}",
-            "Average Reserve (NAD)": f"{avg:,.2f}",
+            "OD Reserve (NAD)":  f"{od_res:,.2f}",
+            "TPL Reserve (NAD)": f"{tpl_res:,.2f}",
+            "Combined Reserve (NAD)": f"{total:,.2f}",
+            "Policies Flagged": int((enriched[f"{short}_decision"] == "Claim").sum()),
         })
     return pd.DataFrame(rows)
 
@@ -450,8 +735,33 @@ education_level = st.sidebar.selectbox("Education Level", ["High School", "Bache
 employment_status = st.sidebar.selectbox("Employment", ["Employed", "Self-Employed", "Unemployed", "Retired"])
 income_level = st.sidebar.selectbox("Income Level", ["Low", "Medium", "High"])
 home_ownership = st.sidebar.selectbox("Home Ownership", ["Own", "Rent", "Mortgage"])
-region = st.sidebar.selectbox("Region", ["Khomas", "Erongo", "Oshana", "Otjozondjupa", "Kavango", "Zambezi"])
+
+# --- Region & Town (all 14 regions + all towns) ---
+region = st.sidebar.selectbox("Region", REGIONS)
+town = st.sidebar.selectbox("Town", TOWNS_BY_REGION[region])
+
 urban_rural = st.sidebar.selectbox("Urban/Rural", ["Urban", "Rural"])
+
+st.sidebar.divider(); st.sidebar.header("Location & Crowding")
+area_km2 = st.sidebar.number_input(
+    "Total Area of Place (km²)", min_value=0.1, max_value=50_000.0,
+    value=10.0, step=0.5,
+    help="Land area of the place where the vehicle is garaged / driven.")
+population = st.sidebar.number_input(
+    "Number of People in Place", min_value=1, max_value=20_000_000,
+    value=30_000, step=1_000,
+    help="Resident population of that place.")
+
+computed_density = compute_population_density(area_km2, population)
+if computed_density is not None:
+    st.sidebar.metric(
+        "Computed Density",
+        f"{computed_density:,.0f} people/km²")
+    st.sidebar.caption(
+        f"≈ {computed_density/1_000_000:.4f} people/m²  ·  "
+        f"Band: **{density_band(computed_density)}**")
+else:
+    st.sidebar.warning("Enter area and population to compute density.")
 
 st.sidebar.divider(); st.sidebar.header("Vehicle")
 vehicle_value = st.sidebar.number_input("Vehicle Value (NAD)", 20_000, 1_500_000, 250_000, step=10_000)
@@ -489,7 +799,7 @@ input_df = pd.DataFrame([{
     "age": age, "age_group": age_group, "gender": gender,
     "marital_status": marital_status, "education_level": education_level,
     "employment_status": employment_status, "income_level": income_level,
-    "home_ownership": home_ownership, "region": region,
+    "home_ownership": home_ownership, "region": region, "town": town,
     "urban_rural": 1 if urban_rural == "Urban" else 0,
     "vehicle_value": vehicle_value, "vehicle_age": vehicle_age,
     "vehicle_age_group": vehicle_age_group, "engine_capacity": engine_capacity,
@@ -509,8 +819,7 @@ input_df = pd.DataFrame([{
     "telematics_score": telematics_score,
 }])
 
-# Silent reset on input change
-current_fp = hash(tuple(input_df.iloc[0].astype(str).tolist()))
+current_fp = hash(tuple(input_df.iloc[0].astype(str).tolist()) + (area_km2, population))
 if "input_fingerprint" not in st.session_state:
     st.session_state["input_fingerprint"] = current_fp
 if "last_results" not in st.session_state:
@@ -532,24 +841,62 @@ tab_single, tab_bulk = st.tabs(["Single Policyholder", "Bulk Policy File"])
 # TAB 1 - Single
 # ============================================================
 with tab_single:
+    st.subheader("Reserve Assumptions")
+    a1, a2, a3 = st.columns(3)
+    with a1:
+        od_severity_rate = st.slider(
+            "OD Severity Rate (% of vehicle value)",
+            min_value=0.05, max_value=1.00, value=0.30, step=0.05,
+            help="Average own-damage repair cost as a share of vehicle value.")
+    with a2:
+        tpl_base_severity = st.number_input(
+            "TPL Base Severity (NAD per claim)",
+            min_value=10_000, max_value=1_000_000, value=150_000, step=10_000,
+            help="Typical third-party injury/legal cost. NOT tied to your car's value.")
+    with a3:
+        safety_loading = st.slider(
+            "Safety Loading Multiplier",
+            min_value=1.00, max_value=2.00, value=1.25, step=0.05,
+            help="Prudential margin on top of expected loss.")
+
+    if computed_density is not None:
+        band = density_band(computed_density)
+        od_delta = density_od_delta(computed_density)
+        tpl_delta = density_tpl_delta(computed_density)
+        st.markdown(
+            f"**Crowding:** `{computed_density:,.0f}` people/km²  ·  "
+            f"Band: **{band}**  ·  "
+            f"OD freq Δ `{od_delta:+.2f}`  ·  "
+            f"TPL freq Δ `{tpl_delta:+.2f}`"
+        )
+    else:
+        st.warning("Enter area and population in the sidebar to compute density.")
+
+    st.divider()
     st.subheader("Generate Prediction")
-    st.write("Adjust the policyholder details in the sidebar, then click "
-             "**Predict Claim Risk**.")
     predict_clicked = st.button("Predict Claim Risk", type="primary", use_container_width=True)
 
     if predict_clicked:
-        freq_mult = calculate_frequency_multiplier(
-            age=age,
-            years_driving=years_driving,
-            prior_claims=prior_claims,
-            violations=traffic_violations,
-            mileage=annual_mileage,
-            credit_score=credit_score,
-            urban_rural=urban_rural,
-            vehicle_age=vehicle_age,
+        od_freq = calculate_od_frequency_multiplier(
+            age=age, gender=gender, years_driving=years_driving,
+            prior_claims=prior_claims, violations=traffic_violations,
+            mileage=annual_mileage, credit_score=credit_score,
+            urban_rural=urban_rural, vehicle_age=vehicle_age,
             safety_features=1 if safety_features == "Yes" else 0,
+            density=computed_density,
         )
-        sev_load = calculate_severity_loading(vehicle_value, vehicle_type)
+        tpl_freq = calculate_tpl_frequency_multiplier(
+            age=age, gender=gender, years_driving=years_driving,
+            prior_claims=prior_claims, violations=traffic_violations,
+            mileage=annual_mileage, credit_score=credit_score,
+            urban_rural=urban_rural,
+            density=computed_density,
+        )
+        od_sev_load  = calculate_od_severity_loading(vehicle_value, vehicle_type, vehicle_age, gender)
+        tpl_sev_load = calculate_tpl_severity_loading(vehicle_type, urban_rural, region, gender)
+
+        od_severity_nad  = vehicle_value * od_severity_rate * od_sev_load
+        tpl_severity_nad = tpl_base_severity * tpl_sev_load
 
         new = {}
         for h, cfg in HORIZONS.items():
@@ -557,13 +904,27 @@ with tab_single:
                 st.warning(f"Model file `{cfg['file']}` not found. Skipping {h}.")
                 continue
             try:
-                base = float(MODELS[h].predict_proba(input_df)[0, 1])
-                adj = min(base * freq_mult, 0.95)
-                new[h] = adj
-                decision = "Claim" if adj >= cfg["threshold"] else "No Claim"
+                base = float(MODELS[h].predict_proba(input_df[MODEL_FEATURES])[0, 1])
+                od_prob  = min(base * OD_CLAIM_SHARE  * od_freq,  0.95)
+                tpl_prob = min(base * TPL_CLAIM_SHARE * tpl_freq, 0.90)
+                combined = min(od_prob + tpl_prob, 0.95)
+
+                od_reserve  = od_prob  * od_severity_nad  * safety_loading
+                tpl_reserve = tpl_prob * tpl_severity_nad * safety_loading
+
+                new[h] = {
+                    "od_prob": od_prob, "tpl_prob": tpl_prob,
+                    "combined": combined,
+                    "od_severity_nad": od_severity_nad,
+                    "tpl_severity_nad": tpl_severity_nad,
+                    "od_reserve": od_reserve, "tpl_reserve": tpl_reserve,
+                    "total_reserve": od_reserve + tpl_reserve,
+                    "od_freq": od_freq, "tpl_freq": tpl_freq,
+                }
+                decision = "Claim" if combined >= cfg["threshold"] else "No Claim"
                 log_prediction(age=age, gender=gender, vehicle_val=vehicle_value,
                                premium=premium_amount, horizon=h,
-                               decision=decision, prob=adj)
+                               decision=decision, prob=combined)
             except Exception as e:
                 st.warning(f"Prediction failed for `{h}`: {e}")
 
@@ -571,41 +932,59 @@ with tab_single:
             st.session_state["last_results"] = new
             st.success("Prediction results have been logged to the database.")
             with st.expander("How the risk was assembled"):
-                st.write(f"**Frequency multiplier:** {freq_mult:.2f}")
-                st.write(f"**Severity loading:** {sev_load:.2f}")
-                st.write("Reserve per horizon = probability × vehicle_value × "
-                         "severity_rate × severity_loading × safety_loading.")
+                if computed_density is not None:
+                    st.write(
+                        f"**Crowding:** {computed_density:,.0f} people/km² "
+                        f"({density_band(computed_density)}) — OD Δ "
+                        f"{density_od_delta(computed_density):+.2f}, TPL Δ "
+                        f"{density_tpl_delta(computed_density):+.2f}"
+                    )
+                else:
+                    st.write("**Crowding:** falling back to urban/rural flag.")
+                st.write(f"**OD frequency multiplier:** {od_freq:.2f}")
+                st.write(f"**TPL frequency multiplier:** {tpl_freq:.2f}")
+                st.write(f"**OD severity loading:** {od_sev_load:.2f}")
+                st.write(f"**TPL severity loading:** {tpl_sev_load:.2f}")
 
     results = st.session_state["last_results"]
-    st.markdown("### Predicted Claim Likelihood")
+    st.markdown("### Predicted Claim Likelihood (Combined OD + TPL)")
     c1, c2, c3 = st.columns(3)
-    with c1: render_card("3 months", HORIZONS["3 months"], results.get("3 months"))
-    with c2: render_card("6 months", HORIZONS["6 months"], results.get("6 months"))
-    with c3: render_card("12 months", HORIZONS["12 months"], results.get("12 months"))
+    with c1: render_card("3 months",  HORIZONS["3 months"],  results.get("3 months",  {}).get("combined"))
+    with c2: render_card("6 months",  HORIZONS["6 months"],  results.get("6 months",  {}).get("combined"))
+    with c3: render_card("12 months", HORIZONS["12 months"], results.get("12 months", {}).get("combined"))
 
     if results:
-        st.divider(); st.subheader("Summary")
-        summary = pd.DataFrame({
-            "3 months": [
-                f"{results.get('3 months',0):.2%}",
-                risk_level(results.get('3 months',0), HORIZONS['3 months']['threshold'])[0],
-                "Claim" if results.get('3 months',0)>=HORIZONS['3 months']['threshold'] else "No Claim",
-                f"{HORIZONS['3 months']['threshold']:.2f}",
-            ],
-            "6 months": [
-                f"{results.get('6 months',0):.2%}",
-                risk_level(results.get('6 months',0), HORIZONS['6 months']['threshold'])[0],
-                "Claim" if results.get('6 months',0)>=HORIZONS['6 months']['threshold'] else "No Claim",
-                f"{HORIZONS['6 months']['threshold']:.2f}",
-            ],
-            "12 months": [
-                f"{results.get('12 months',0):.2%}",
-                risk_level(results.get('12 months',0), HORIZONS['12 months']['threshold'])[0],
-                "Claim" if results.get('12 months',0)>=HORIZONS['12 months']['threshold'] else "No Claim",
-                f"{HORIZONS['12 months']['threshold']:.2f}",
-            ],
-        }, index=["Probability", "Risk Level", "Decision", "Threshold"])
-        st.dataframe(summary, use_container_width=True)
+        st.divider()
+        st.subheader("Risk Breakdown — Own Damage vs Third-Party Liability")
+        st.caption(
+            "Each risk is calculated as **frequency × severity**. "
+            "Crowding drives frequency; vehicle value drives OD severity only."
+        )
+        rows = []
+        for h in HORIZONS:
+            r = results.get(h)
+            if not r:
+                continue
+            rows.append({
+                "Horizon": h,
+                "OD Freq ×": f"{r['od_freq']:.2f}",
+                "OD Prob":    f"{r['od_prob']:.2%}",
+                "OD Sev (NAD)": f"{r['od_severity_nad']:,.0f}",
+                "OD Reserve (NAD)": f"{r['od_reserve']:,.2f}",
+                "TPL Freq ×": f"{r['tpl_freq']:.2f}",
+                "TPL Prob":   f"{r['tpl_prob']:.2%}",
+                "TPL Sev (NAD)": f"{r['tpl_severity_nad']:,.0f}",
+                "TPL Reserve (NAD)": f"{r['tpl_reserve']:,.2f}",
+                "Total Reserve (NAD)": f"{r['total_reserve']:,.2f}",
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        st.info(
+            f"**Reserve to hold for 12 months:** "
+            f"NAD {results.get('12 months', {}).get('total_reserve', 0):,.2f} "
+            f"(OD {results.get('12 months', {}).get('od_reserve', 0):,.2f} + "
+            f"TPL {results.get('12 months', {}).get('tpl_reserve', 0):,.2f})."
+        )
 
 # ============================================================
 # TAB 2 - Bulk
@@ -613,12 +992,20 @@ with tab_single:
 with tab_bulk:
     st.subheader("Bulk Policy Risk & Reserve Recommendation")
 
+    st.info(
+        "**Flexible upload:** only `policy_id` is recommended — everything else is "
+        "auto-filled with sensible defaults if missing. Use the template below "
+        "for the full reference schema."
+    )
+
     template_df = pd.DataFrame([{
         "policy_id": "P0001", "age": 35, "age_group": "Adult", "gender": "Male",
         "marital_status": "Married", "education_level": "Bachelor",
         "employment_status": "Employed", "income_level": "Medium",
-        "home_ownership": "Own", "region": "Khomas", "urban_rural": "Urban",
-        "vehicle_value": 250000, "vehicle_age": 5, "vehicle_age_group": "Recent",
+        "home_ownership": "Own", "region": "Khomas", "town": "Windhoek",
+        "urban_rural": "Urban", "area_km2": 10.0, "population": 30000,
+        "population_density": 3000.0, "vehicle_value": 250000,
+        "vehicle_age": 5, "vehicle_age_group": "Recent",
         "engine_capacity": 2000, "vehicle_weight": 1500,
         "vehicle_type": "Sedan", "vehicle_brand": "Toyota",
         "fuel_type": "Petrol", "transmission": "Manual",
@@ -630,8 +1017,13 @@ with tab_bulk:
         "traffic_violations": 0, "credit_score": 650, "annual_mileage": 20000,
         "has_telematics": "Yes", "telematics_score": 50,
     }])
-    with st.expander("📄 Download template (required columns)"):
+    with st.expander("📄 Download reference template (all columns)"):
         st.dataframe(template_df, use_container_width=True, hide_index=True)
+        st.caption(
+            "Missing columns will be **auto-filled** at prediction time — you do "
+            "not have to include everything. `area_km2` + `population` OR "
+            "`population_density` are optional density inputs."
+        )
         st.download_button("Download template (CSV)",
             data=template_df.to_csv(index=False).encode("utf-8"),
             file_name="bulk_policy_template.csv", mime="text/csv")
@@ -645,12 +1037,15 @@ with tab_bulk:
                                 type=["csv", "xlsx", "xls"], key="bulk_upload")
 
     st.markdown("#### Reserve Assumptions")
-    ca, cb = st.columns(2)
+    ca, cb, cc = st.columns(3)
     with ca:
-        severity_rate = st.slider("Expected Claim Severity (% of vehicle value)",
+        bulk_od_rate = st.slider("OD Severity Rate (% of vehicle value)",
             min_value=0.05, max_value=1.00, value=0.30, step=0.05)
     with cb:
-        safety_loading = st.slider("Safety Loading Multiplier",
+        bulk_tpl_base = st.number_input("TPL Base Severity (NAD per claim)",
+            min_value=10_000, max_value=1_000_000, value=150_000, step=10_000)
+    with cc:
+        bulk_safety = st.slider("Safety Loading Multiplier",
             min_value=1.00, max_value=2.00, value=1.25, step=0.05)
 
     run_bulk = st.button("Run Bulk Prediction", type="primary",
@@ -668,19 +1063,30 @@ with tab_bulk:
             with st.expander("Preview uploaded data (first 5 rows)"):
                 st.dataframe(raw.head(5), use_container_width=True, hide_index=True)
 
-            prepared, err = prepare_bulk_input(raw)
+            prepared, err, filled = prepare_bulk_input(raw)
             if err:
                 st.error(err)
-            elif run_bulk:
-                try:
-                    with st.spinner("Running predictions for all policies..."):
-                        enriched = run_bulk_prediction(prepared, severity_rate, safety_loading)
-                    st.session_state["bulk_results"] = enriched
-                    st.success(f"Bulk prediction complete for **{len(enriched)}** policies.")
-                except FileNotFoundError as e:
-                    st.error(str(e))
-                except Exception as e:
-                    st.error(f"Bulk prediction failed: {e}")
+            else:
+                if filled:
+                    st.warning(
+                        f"**Auto-filled {len(filled)} column(s)** with defaults: "
+                        f"`{', '.join(filled)}` — predictions will use the "
+                        f"training-median defaults for these features."
+                    )
+                else:
+                    st.success("All expected columns present in the upload.")
+
+                if run_bulk:
+                    try:
+                        with st.spinner("Running predictions for all policies..."):
+                            enriched = run_bulk_prediction(prepared, bulk_od_rate,
+                                                           bulk_tpl_base, bulk_safety)
+                        st.session_state["bulk_results"] = enriched
+                        st.success(f"Bulk prediction complete for **{len(enriched)}** policies.")
+                    except FileNotFoundError as e:
+                        st.error(str(e))
+                    except Exception as e:
+                        st.error(f"Bulk prediction failed: {e}")
 
     if "bulk_results" in st.session_state:
         enriched = st.session_state["bulk_results"]
@@ -688,64 +1094,88 @@ with tab_bulk:
 
         st.subheader("Portfolio Reserve Ladder")
         st.caption(
-            "3M, 6M and 12M horizons are cumulative windows over the same book. "
-            "They must NOT be added. The 12M figure is the amount to hold for the "
-            "full 12-month horizon."
+            "Own Damage and Third-Party Liability are calculated separately. "
+            "3M, 6M and 12M horizons are cumulative and must NOT be summed. "
+            "The 12M combined reserve is the solvency figure."
         )
 
-        total_3m  = enriched["3M_reserve"].sum()
-        total_6m  = enriched["6M_reserve"].sum()
-        total_12m = enriched["12M_reserve"].sum()
+        t3_od  = enriched["3M_od_reserve"].sum();  t3_tpl  = enriched["3M_tpl_reserve"].sum()
+        t6_od  = enriched["6M_od_reserve"].sum();  t6_tpl  = enriched["6M_tpl_reserve"].sum()
+        t12_od = enriched["12M_od_reserve"].sum(); t12_tpl = enriched["12M_tpl_reserve"].sum()
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Policies", f"{len(enriched):,}")
-        m2.metric("Reserve @ 3M horizon", f"NAD {total_3m:,.0f}")
-        m3.metric("Reserve @ 6M horizon", f"NAD {total_6m:,.0f}")
-        m4.metric("Reserve @ 12M horizon", f"NAD {total_12m:,.0f}",
-                  help="Cumulative expected loss over 12 months - the solvency figure.")
+        m2.metric("3M Reserve (OD+TPL)",  f"NAD {t3_od + t3_tpl:,.0f}")
+        m3.metric("6M Reserve (OD+TPL)",  f"NAD {t6_od + t6_tpl:,.0f}")
+        m4.metric("12M Reserve (OD+TPL)", f"NAD {t12_od + t12_tpl:,.0f}",
+                  help="Cumulative expected loss over 12 months — the solvency figure.")
 
-        st.markdown("##### Breakdown by Horizon")
+        st.markdown("##### Reserve breakdown by horizon")
         st.dataframe(portfolio_summary(enriched), use_container_width=True, hide_index=True)
 
-        st.markdown("##### Book Composition by Risk Level (12-Month Horizon)")
-        comp = (
-            enriched.groupby("12M_risk_level")
-            .agg(policies=("policy_id", "count"),
-                 total_reserve=("12M_reserve", "sum"))
-            .reset_index()
-            .rename(columns={"12M_risk_level": "Risk Level",
-                             "policies": "Policies",
-                             "total_reserve": "12M Reserve (NAD)"})
-        )
-        comp["12M Reserve (NAD)"] = comp["12M Reserve (NAD)"].map(lambda v: f"{v:,.2f}")
+        st.markdown("##### 12-Month reserve: OD vs TPL")
+        comp = pd.DataFrame({
+            "Risk type": ["Own Damage", "Third-Party Liability", "Combined"],
+            "12M Reserve (NAD)": [
+                f"{t12_od:,.2f}", f"{t12_tpl:,.2f}", f"{t12_od + t12_tpl:,.2f}",
+            ],
+        })
         st.dataframe(comp, use_container_width=True, hide_index=True)
+
+        st.markdown("##### Crowding composition of the book")
+        crowd = (
+            enriched.assign(density=pd.to_numeric(enriched.get("population_density"), errors="coerce"))
+            .assign(band=lambda d: d["density"].apply(
+                lambda v: density_band(None if pd.isna(v) else v)))
+            .groupby("band")
+            .agg(policies=("policy_id", "count"),
+                 total_12m_reserve=("12M_total_reserve", "sum"))
+            .reset_index()
+            .rename(columns={"band": "Crowding band",
+                             "policies": "Policies",
+                             "total_12m_reserve": "12M Reserve (NAD)"})
+        )
+        crowd["12M Reserve (NAD)"] = crowd["12M Reserve (NAD)"].map(lambda v: f"{v:,.2f}")
+        st.dataframe(crowd, use_container_width=True, hide_index=True)
 
         st.divider()
         st.subheader("Per-Policy Risk and Reserve")
 
         show_cols = [
-            "policy_id",
-            "3M_probability", "3M_risk_level", "3M_reserve",
-            "6M_probability", "6M_risk_level", "6M_reserve",
-            "12M_probability", "12M_risk_level", "12M_reserve",
+            "policy_id", "region", "town",
+            "population_density", "crowding_band",
+            "3M_od_prob", "3M_tpl_prob", "3M_od_reserve", "3M_tpl_reserve", "3M_total_reserve",
+            "6M_od_prob", "6M_tpl_prob", "6M_od_reserve", "6M_tpl_reserve", "6M_total_reserve",
+            "12M_od_prob", "12M_tpl_prob", "12M_od_reserve", "12M_tpl_reserve", "12M_total_reserve",
             "total_reserve",
         ]
         show_cols = [c for c in show_cols if c in enriched.columns]
         view = enriched[show_cols].copy()
 
-        for c in ["3M_probability", "6M_probability", "12M_probability"]:
+        for c in ["3M_od_prob", "3M_tpl_prob", "6M_od_prob", "6M_tpl_prob", "12M_od_prob", "12M_tpl_prob"]:
             if c in view.columns:
                 view[c] = view[c].map(lambda v: f"{v:.2%}")
-        for c in ["3M_reserve", "6M_reserve", "12M_reserve", "total_reserve"]:
+        for c in [x for x in show_cols if "reserve" in x]:
             if c in view.columns:
                 view[c] = view[c].map(lambda v: f"{v:,.2f}")
+        if "population_density" in view.columns:
+            view["population_density"] = view["population_density"].map(
+                lambda v: "n/a" if pd.isna(v) else f"{v:,.0f}")
 
         view = view.rename(columns={
-            "policy_id": "Policy",
-            "3M_probability": "3M Prob", "3M_risk_level": "3M Risk", "3M_reserve": "3M Reserve",
-            "6M_probability": "6M Prob", "6M_risk_level": "6M Risk", "6M_reserve": "6M Reserve",
-            "12M_probability": "12M Prob", "12M_risk_level": "12M Risk", "12M_reserve": "12M Reserve",
-            "total_reserve": "Total Reserve",
+            "policy_id": "Policy", "region": "Region", "town": "Town",
+            "population_density": "Density (people/km²)",
+            "crowding_band": "Crowding band",
+            "3M_od_prob": "3M OD Prob",  "3M_tpl_prob": "3M TPL Prob",
+            "3M_od_reserve": "3M OD Res.", "3M_tpl_reserve": "3M TPL Res.",
+            "3M_total_reserve": "3M Total",
+            "6M_od_prob": "6M OD Prob",  "6M_tpl_prob": "6M TPL Prob",
+            "6M_od_reserve": "6M OD Res.", "6M_tpl_reserve": "6M TPL Res.",
+            "6M_total_reserve": "6M Total",
+            "12M_od_prob": "12M OD Prob", "12M_tpl_prob": "12M TPL Prob",
+            "12M_od_reserve": "12M OD Res.", "12M_tpl_reserve": "12M TPL Res.",
+            "12M_total_reserve": "12M Total",
+            "total_reserve": "Total Reserve (12M)",
         })
         st.dataframe(view, use_container_width=True, hide_index=True)
 
@@ -785,7 +1215,6 @@ df_logs = get_all_predictions()
 if not df_logs.empty:
     total = len(df_logs)
     st.write(f"Total logged predictions in database: **{total}**")
-
     PAGE_SIZE = 50
     pages = max(1, (total - 1) // PAGE_SIZE + 1)
     page = st.number_input("Page", min_value=1, max_value=pages, value=1, step=1)
