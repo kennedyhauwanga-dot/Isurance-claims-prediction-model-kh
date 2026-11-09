@@ -211,8 +211,10 @@ def check_credentials():
     if st.session_state.get("authentication_status") is True:
         return True
 
-    st.title("System Login meant only for my Thesis: Kennedy N Hauwanga")
-    st.write("Please enter your credentials to access the Claim Risk Prediction System.")
+    # --- PROFESSIONAL LOGIN HEADER ---
+    st.title("Insurance Claim Risk Prediction System")
+    st.markdown("**Secure Access Portal** | University of Namibia Research Thesis — Kennedy N. Hauwanga")
+    st.divider()
 
     with st.form("login_form", clear_on_submit=False):
         st.text_input("Username", key="username")
@@ -906,7 +908,6 @@ with tab_bulk:
     with st.expander("📄 Download reference template (all columns)"):
         st.dataframe(template_df, use_container_width=True, hide_index=True)
         
-        # REMOVED THE CAPTION HERE
         st.download_button("Download template (CSV)",
             data=template_df.to_csv(index=False).encode("utf-8"),
             file_name="bulk_policy_template.csv", mime="text/csv")
