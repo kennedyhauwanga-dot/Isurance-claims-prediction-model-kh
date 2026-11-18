@@ -221,22 +221,73 @@ def warm_models():
 
 MODELS = warm_models()
 
-# ---------- Helpers ----------
+# ---------- Helpers & Domain Rules ----------
+def apply_domain_rules(base_prob, age, gender, marital_status, urban_rural):
+    """Applies insurance underwriting rules directly to the base probability."""
+    adj = 1.0
+    
+    # 1. Marital Status (Married = lower risk, Single = higher risk)
+    if str(marital_status).strip().title() == "Married":
+        adj -= 0.15
+    elif str(marital_status).strip().title() == "Single":
+        adj += 0.15
+    elif str(marital_status).strip().title() in ["Divorced", "Widowed"]:
+        adj += 0.05
+        
+    # 2. Gender (Male = higher risk, Female = lower risk)
+    if str(gender).strip().title() == "Male":
+        adj += 0.10
+    elif str(gender).strip().title() == "Female":
+        adj -= 0.10
+        
+    # 3. Location (Urban = higher risk, Rural = lower risk)
+    if urban_rural == 1 or str(urban_rural).strip().title() == "Urban":
+        adj += 0.10
+    else:
+        adj -= 0.10
+        
+    # 4. Age (Young = higher risk, Older = lower risk)
+    if age < 25:
+        adj += 0.15
+    elif age > 60:
+        adj -= 0.10
+    elif age < 35:
+        adj += 0.05
+
+    # Apply adjustment factor and clip to valid probability range
+    final_prob = base_prob * adj
+    return np.clip(final_prob, 0.01, 0.99)
+
+def apply_domain_rules_vector(base_prob, df):
+    """Vectorised version of domain rules for bulk predictions."""
+    adj = pd.Series(1.0, index=df.index)
+    
+    # Marital Status
+    adj += np.where(df["marital_status"].astype(str).str.strip().str.title() == "Single", 0.15,
+           np.where(df["marital_status"].astype(str).str.strip().str.title().isin(["Divorced", "Widowed"]), 0.05,
+           np.where(df["marital_status"].astype(str).str.strip().str.title() == "Married", -0.15, 0.0)))
+           
+    # Gender
+    adj += np.where(df["gender"].astype(str).str.strip().str.title() == "Male", 0.10, -0.10)
+    
+    # Urban/Rural
+    adj += np.where(df["urban_rural"] == 1, 0.10, -0.10)
+    
+    # Age
+    adj += np.where(df["age"] < 25, 0.15, 
+           np.where(df["age"] > 60, -0.10, 
+           np.where(df["age"] < 35, 0.05, 0.0)))
+    
+    final_prob = base_prob * adj
+    return np.clip(final_prob, 0.01, 0.99)
+
 def risk_level(prob, threshold):
-    # Uses the model's actual optimal threshold to determine risk colors
     if prob < (threshold * 0.5):
         return "Low", "#2e7d32"      # Green
     elif prob < threshold:
         return "Moderate", "#f9a825" # Yellow
     else:
         return "High", "#c62828"     # Red
-
-def compute_population_density(area_km2, population):
-    try:
-        a = float(area_km2); p = float(population)
-        if a <= 0 or p <= 0: return None
-        return p / a
-    except (TypeError, ValueError): return None
 
 def density_band(density):
     if density is None: return "Unknown"
@@ -321,16 +372,18 @@ def run_bulk_prediction(df, od_severity_rate, tpl_base_severity, safety_loading)
 
     out = df.copy()
     out["crowding_band"] = out["population_density"].apply(lambda d: density_band(None if pd.isna(d) else d))
-
     X = out[MODEL_FEATURES]
 
     for h, cfg in HORIZONS.items():
         short = cfg["short"]
         
-        # Direct model probability - NO ARTIFICIAL MULTIPLIERS
-        prob = models[h].predict_proba(X)[:, 1]
+        # 1. Base model prediction
+        base_prob = models[h].predict_proba(X)[:, 1]
         
-        # Split probability for reserve calculation purposes only
+        # 2. Apply Domain Rules (Married, Male, Urban, Young, etc.)
+        prob = apply_domain_rules_vector(base_prob, out)
+        
+        # 3. Split for reserve calculation purposes
         od_prob = prob * 0.70
         tpl_prob = prob * 0.30
         
@@ -467,6 +520,16 @@ tab_single, tab_bulk = st.tabs(["Single Policyholder", "Bulk Policy File"])
 # ============================================================
 with tab_single:
     st.subheader("Generate Prediction")
+    
+    with st.expander("ℹ️ How Risk is Calculated", expanded=False):
+        st.markdown("""
+        The prediction combines the **XGBoost Machine Learning model** with standard **Insurance Underwriting Rules**:
+        * **Marital Status:** Married reduces risk (-15%), Single increases risk (+15%)
+        * **Gender:** Male increases risk (+10%), Female reduces risk (-10%)
+        * **Location:** Urban increases risk (+10%), Rural reduces risk (-10%)
+        * **Age:** Under 25 increases risk (+15%), Over 60 reduces risk (-10%)
+        """)
+
     predict_clicked = st.button("Predict Claim Risk", type="primary", use_container_width=True)
 
     if predict_clicked:
@@ -474,8 +537,12 @@ with tab_single:
         for h, cfg in HORIZONS.items():
             if MODELS.get(h) is None: continue
             try:
-                # Direct prediction from the model
-                prob = float(MODELS[h].predict_proba(input_df[MODEL_FEATURES])[0, 1])
+                # 1. Base prediction
+                base_prob = float(MODELS[h].predict_proba(input_df[MODEL_FEATURES])[0, 1])
+                
+                # 2. Apply domain rules
+                prob = apply_domain_rules(base_prob, age, gender, marital_status, 1 if urban_rural == "Urban" else 0)
+                
                 decision = "Claim" if prob >= cfg["threshold"] else "No Claim"
                 
                 new[h] = {"prob": prob, "decision": decision}
