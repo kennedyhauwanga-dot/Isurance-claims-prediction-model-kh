@@ -31,18 +31,18 @@ if not hasattr(SimpleImputer, '_fill_dtype'):
 st.set_page_config(page_title="Insurance Claim Risk Prediction", layout="wide")
 
 # ---------- Model configuration ----------
-# Adjusted thresholds to match the new calibrated probabilities
+# Adjusted thresholds to match the new realistic probability scale
 HORIZONS = {
-    "3 months":  {"file": "xgb_3M.joblib",  "threshold": 0.05, "color": "#1976d2", "short": "3M"},
-    "6 months":  {"file": "xgb_6M.joblib",  "threshold": 0.08, "color": "#f57c00", "short": "6M"},
-    "12 months": {"file": "xgb_12M.joblib", "threshold": 0.12, "color": "#388e3c", "short": "12M"},
+    "3 months":  {"file": "xgb_3M.joblib",  "threshold": 0.10, "color": "#1976d2", "short": "3M"},
+    "6 months":  {"file": "xgb_6M.joblib",  "threshold": 0.15, "color": "#f57c00", "short": "6M"},
+    "12 months": {"file": "xgb_12M.joblib", "threshold": 0.20, "color": "#388e3c", "short": "12M"},
 }
 
 OD_CLAIM_SHARE  = 0.65
 TPL_CLAIM_SHARE = 0.35
 
-# Calibration factor to offset the XGBoost model's bias toward predicting claims
-PROBABILITY_CALIBRATION = 0.25 
+# Calibrated to bridge the gap between raw XGBoost (too high) and pure logic (too low)
+PROBABILITY_CALIBRATION = 0.65 
 
 # ---------- Region & Town data (official) ----------
 REGIONS = [
@@ -535,13 +535,13 @@ def run_bulk_prediction(df, od_severity_rate, tpl_base_severity, safety_loading)
         
         base = base * PROBABILITY_CALIBRATION 
 
-        # Apply tighter caps to reflect real-world odds
-        od_prob  = np.minimum(base * OD_CLAIM_SHARE  * out["od_frequency_mult"].values,  0.40)
-        tpl_prob = np.minimum(base * TPL_CLAIM_SHARE * out["tpl_frequency_mult"].values, 0.20)
+        # Increased caps to allow for realistic high-risk profiles (up to 60% OD, 40% TPL)
+        od_prob  = np.minimum(base * OD_CLAIM_SHARE  * out["od_frequency_mult"].values,  0.60)
+        tpl_prob = np.minimum(base * TPL_CLAIM_SHARE * out["tpl_frequency_mult"].values, 0.40)
         
         od_reserve  = (od_prob  * od_severity_nad  * safety_loading).round(2)
         tpl_reserve = (tpl_prob * tpl_severity_nad * safety_loading).round(2)
-        combined_prob = np.minimum(od_prob + tpl_prob, 0.45)
+        combined_prob = np.minimum(od_prob + tpl_prob, 0.80)
 
         out[f"{short}_od_prob"]      = od_prob
         out[f"{short}_od_reserve"]   = od_reserve
@@ -696,9 +696,9 @@ with tab_single:
                 
                 base = base * PROBABILITY_CALIBRATION
 
-                od_prob  = min(base * OD_CLAIM_SHARE  * od_freq,  0.40)
-                tpl_prob = min(base * TPL_CLAIM_SHARE * tpl_freq, 0.20)
-                combined = min(od_prob + tpl_prob, 0.45)
+                od_prob  = min(base * OD_CLAIM_SHARE  * od_freq,  0.60)
+                tpl_prob = min(base * TPL_CLAIM_SHARE * tpl_freq, 0.40)
+                combined = min(od_prob + tpl_prob, 0.80)
 
                 new[h] = {"od_prob": od_prob, "tpl_prob": tpl_prob, "combined": combined}
                 decision = "Claim" if combined >= cfg["threshold"] else "No Claim"
