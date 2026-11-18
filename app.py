@@ -229,13 +229,13 @@ MODELS = warm_models()
 
 # ---------- Helpers ----------
 def risk_level(prob):
-    # Fixed visual bands to ensure clear categorisation across all horizons
-    if prob < 0.15:
-        return "Low", "#2e7d32"    # Green
-    elif prob < 0.30:
+    # Aligned thresholds with the visual slider gradient (Green -> Yellow -> Red)
+    if prob < 0.35:
+        return "Low", "#2e7d32"      # Green
+    elif prob < 0.65:
         return "Moderate", "#f9a825" # Yellow
     else:
-        return "High", "#c62828"   # Red
+        return "High", "#c62828"     # Red
 
 def compute_population_density(area_km2, population):
     try:
