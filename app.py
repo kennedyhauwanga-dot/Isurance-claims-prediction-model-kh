@@ -466,10 +466,12 @@ def render_card(horizon, cfg, prob=None):
     decision = "Claim Likely" if prob >= cfg["threshold"] else "No Claim"
     decision_color = "#c62828" if prob >= cfg["threshold"] else "#2e7d32"
     left_pct = min(max(prob * 100, 0), 100)
+    
+    # Changed color:{cfg['color']} to a fixed color (#1a2a4a) for consistency
     st.markdown(f"""
         <div style="background:#fff;border:1px solid #e0e6ef;border-radius:14px;padding:24px 20px;text-align:center;box-shadow:0 3px 12px rgba(0,0,0,.06);">
           <div style="font-size:15px;color:#4a5568;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;">Within {horizon}</div>
-          <div style="font-size:52px;font-weight:800;color:{cfg['color']};margin:10px 0 4px;">{prob:.1%}</div>
+          <div style="font-size:52px;font-weight:800;color:#1a2a4a;margin:10px 0 4px;">{prob:.1%}</div>
           <div style="font-size:13px;color:#666;margin-bottom:14px;">Likelihood of a claim</div>
           <div style="display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
             <span style="background:{risk_color};color:#fff;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;">{risk}</span>
