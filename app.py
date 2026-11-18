@@ -865,24 +865,7 @@ with tab_single:
     with c2: render_card("6 months",  HORIZONS["6 months"],  results.get("6 months",  {}).get("combined"))
     with c3: render_card("12 months", HORIZONS["12 months"], results.get("12 months", {}).get("combined"))
 
-    if results:
-        st.divider()
-        st.subheader("Risk Breakdown — Own Damage vs Third-Party Liability")
-        rows = []
-        for h in HORIZONS:
-            r = results.get(h)
-            if not r:
-                continue
-            
-            # CLEAN TABLE: Removed the OD/TPL Freq multipliers completely
-            rows.append({
-                "Horizon": h,
-                "OD Prob":    f"{r['od_prob']:.2%}",
-                "TPL Prob":   f"{r['tpl_prob']:.2%}",
-                "Combined Prob": f"{r['combined']:.2%}",
-            })
-                
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    # Removed Risk Breakdown Table as requested
 
 # ============================================================
 # TAB 2 - Bulk (PROBABILITIES + RESERVES)
@@ -1087,14 +1070,7 @@ with tab_bulk:
             del st.session_state["bulk_results"]
             st.rerun()
 
-# ---------- Reference table ----------
-st.divider()
-st.subheader("Reference Performance")
-st.dataframe(pd.DataFrame({
-    "Model": ["XGBoost"], "Accuracy": [0.7510], "Precision": [0.7500],
-    "Recall": [1.0000], "F1": [0.8600],
-    "AUC-ROC": [0.6776], "AUC-PR": [0.8585],
-}), use_container_width=True, hide_index=True)
+# Removed Reference Performance Table as requested
 
 # ---------- Admin: Logs (paginated) ----------
 st.divider()
