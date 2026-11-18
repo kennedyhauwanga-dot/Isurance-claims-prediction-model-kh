@@ -230,10 +230,10 @@ MODELS = warm_models()
 # ---------- Helpers ----------
 def risk_level(prob, threshold):
     if prob < threshold:
-        return "Low Risk", "#2e7d32"
+        return "Low", "#2e7d32"
     if prob < 2 * threshold:
-        return "Medium Risk", "#f9a825"
-    return "High Risk", "#c62828"
+        return "Moderate", "#f9a825"
+    return "High", "#c62828"
 
 def compute_population_density(area_km2, population):
     try:
