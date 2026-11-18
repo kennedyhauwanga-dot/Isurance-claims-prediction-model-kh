@@ -31,17 +31,12 @@ if not hasattr(SimpleImputer, '_fill_dtype'):
 st.set_page_config(page_title="Insurance Claim Risk Prediction", layout="wide")
 
 # ---------- Model configuration ----------
+# Thresholds aligned exactly with the optimal F1 thresholds from your Jupyter Notebook
 HORIZONS = {
-    "3 months":  {"file": "xgb_3M.joblib",  "threshold": 0.10, "color": "#1976d2", "short": "3M"},
-    "6 months":  {"file": "xgb_6M.joblib",  "threshold": 0.15, "color": "#f57c00", "short": "6M"},
-    "12 months": {"file": "xgb_12M.joblib", "threshold": 0.20, "color": "#388e3c", "short": "12M"},
+    "3 months":  {"file": "xgb_3M.joblib",  "threshold": 0.30, "color": "#1976d2", "short": "3M"},
+    "6 months":  {"file": "xgb_6M.joblib",  "threshold": 0.22, "color": "#f57c00", "short": "6M"},
+    "12 months": {"file": "xgb_12M.joblib", "threshold": 0.12, "color": "#388e3c", "short": "12M"},
 }
-
-OD_CLAIM_SHARE  = 0.70
-TPL_CLAIM_SHARE = 0.30
-
-# Reduced calibration to pull down the baseline XGBoost probability
-PROBABILITY_CALIBRATION = 0.25 
 
 # ---------- Region & Town data (official) ----------
 REGIONS = [
@@ -227,11 +222,11 @@ def warm_models():
 MODELS = warm_models()
 
 # ---------- Helpers ----------
-def risk_level(prob):
-    # Aligned with visual slider: 0-33% Green, 33-66% Yellow, 66-100% Red
-    if prob < 0.33:
+def risk_level(prob, threshold):
+    # Uses the model's actual optimal threshold to determine risk colors
+    if prob < (threshold * 0.5):
         return "Low", "#2e7d32"      # Green
-    elif prob < 0.66:
+    elif prob < threshold:
         return "Moderate", "#f9a825" # Yellow
     else:
         return "High", "#c62828"     # Red
@@ -252,203 +247,6 @@ def density_band(density):
     if density < 12000:  return "Very Dense"
     return "Hyper-Dense"
 
-def density_od_delta(density):
-    if density is None: return None
-    if density < 500:    return -0.15
-    if density < 1500:   return -0.05
-    if density < 3000:   return  0.05
-    if density < 6000:   return  0.15
-    if density < 12000:  return  0.25
-    return 0.35
-
-def density_tpl_delta(density):
-    if density is None: return None
-    if density < 500:    return -0.30
-    if density < 1500:   return -0.10
-    if density < 3000:   return  0.10
-    if density < 6000:   return  0.25
-    if density < 12000:  return  0.40
-    return 0.60
-
-def density_delta_vector(series, kind="tpl"):
-    dens = pd.to_numeric(series, errors="coerce")
-    if kind == "od":
-        breaks = [-np.inf, 500, 1500, 3000, 6000, 12000, np.inf]
-        values = [-0.15, -0.05, 0.05, 0.15, 0.25, 0.35]
-    else:
-        breaks = [-np.inf, 500, 1500, 3000, 6000, 12000, np.inf]
-        values = [-0.30, -0.10, 0.10, 0.25, 0.40, 0.60]
-    return np.select([(dens >= breaks[i]) & (dens < breaks[i + 1]) for i in range(len(values))], values, default=np.nan)
-
-# ============================================================
-# LOGICAL MULTIPLIERS (OD and TPL) - Made more aggressive
-# ============================================================
-def calculate_od_frequency_multiplier(age, gender, years_driving, prior_claims, violations, mileage, credit_score, urban_rural, vehicle_age, safety_features, marital_status, employment_status, income_level, vehicle_usage, bonus_malus, density=None):
-    m = 1.0
-    
-    # Demographics
-    if str(gender).strip().title() == "Female": m -= 0.10
-    if str(marital_status).strip().title() == "Single": m += 0.15
-    elif str(marital_status).strip().title() in ("Divorced", "Widowed"): m += 0.10
-    elif str(marital_status).strip().title() == "Married": m -= 0.10
-    
-    if str(employment_status).strip().title() == "Unemployed": m += 0.30
-    elif str(employment_status).strip().title() == "Self-Employed": m += 0.10
-    
-    if str(income_level).strip().title() == "Low": m += 0.15
-    elif str(income_level).strip().title() == "High": m -= 0.10
-
-    # Location
-    if density is not None: m += density_od_delta(density)
-    else: m += 0.20 if urban_rural == "Urban" else -0.25
-
-    # Vehicle
-    if vehicle_age > 10: m += 0.20
-    elif vehicle_age > 5: m += 0.10
-    if safety_features == 0: m += 0.15
-    if str(vehicle_usage).strip().title() == "Commercial": m += 0.40
-
-    # History & Behavior
-    if prior_claims == 1: m += 0.20
-    elif prior_claims == 2: m += 0.40
-    elif prior_claims >= 3: m += 0.60
-    if bonus_malus > 0: m += (bonus_malus * 0.10)
-    
-    if age < 25: m += 0.25
-    elif age > 65: m += 0.15
-    
-    if years_driving < 3: m += 0.25
-    elif years_driving < 8: m += 0.10
-    elif years_driving > 15: m -= 0.15
-    
-    if mileage > 30000: m += 0.20
-    if credit_score < 550: m += 0.15
-    if violations > 0: m += 0.10 * violations
-    
-    return max(0.40, min(m, 3.00))
-
-def calculate_od_frequency_multiplier_vector(df):
-    m = pd.Series(1.0, index=df.index)
-    
-    m -= np.where(df["gender"].astype(str).str.strip().str.title() == "Female", 0.10, 0.0)
-    m += np.where(df["marital_status"].astype(str).str.strip().str.title() == "Single", 0.15,
-         np.where(df["marital_status"].astype(str).str.strip().str.title().isin(["Divorced", "Widowed"]), 0.10,
-         np.where(df["marital_status"].astype(str).str.strip().str.title() == "Married", -0.10, 0.0)))
-    m += np.where(df["employment_status"].astype(str).str.strip().str.title() == "Unemployed", 0.30,
-         np.where(df["employment_status"].astype(str).str.strip().str.title() == "Self-Employed", 0.10, 0.0))
-    m += np.where(df["income_level"].astype(str).str.strip().str.title() == "Low", 0.15,
-         np.where(df["income_level"].astype(str).str.strip().str.title() == "High", -0.10, 0.0))
-
-    urban_fallback_od = np.where(df["urban_rural"] == 1, 0.20, -0.25)
-    if "population_density" in df.columns:
-        dens_delta = density_delta_vector(df["population_density"], kind="od")
-        dens_delta = np.where(pd.isna(dens_delta), urban_fallback_od, dens_delta)
-    else: dens_delta = urban_fallback_od
-    m += dens_delta
-
-    va = df["vehicle_age"]
-    m += np.where(va > 10, 0.20, np.where(va > 5, 0.10, 0.0))
-    m += np.where(df["safety_features"] == 0, 0.15, 0.0)
-    m += np.where(df["vehicle_usage"].astype(str).str.strip().str.title() == "Commercial", 0.40, 0.0)
-
-    pc = df["prior_claims"]
-    m += np.where(pc == 1, 0.20, np.where(pc == 2, 0.40, np.where(pc >= 3, 0.60, 0.0)))
-    m += np.where(df["bonus_malus"] > 0, df["bonus_malus"] * 0.10, 0.0)
-    
-    age = df["age"]
-    m += np.where(age < 25, 0.25, np.where(age > 65, 0.15, 0.0))
-    yd = df["years_driving"]
-    m += np.where(yd < 3, 0.25, np.where(yd < 8, 0.10, np.where(yd > 15, -0.15, 0.0)))
-    
-    m += np.where(df["annual_mileage"] > 30000, 0.20, 0.0)
-    m += np.where(df["credit_score"] < 550, 0.15, 0.0)
-    m += 0.10 * df["traffic_violations"]
-    
-    return m.clip(0.40, 3.00).values
-
-def calculate_tpl_frequency_multiplier(age, gender, years_driving, prior_claims, violations, mileage, credit_score, urban_rural, marital_status, employment_status, vehicle_usage, density=None):
-    m = 1.0
-    
-    if str(gender).strip().title() == "Female": m -= 0.10
-    if str(marital_status).strip().title() == "Single": m += 0.20
-    elif str(marital_status).strip().title() in ("Divorced", "Widowed"): m += 0.10
-    elif str(marital_status).strip().title() == "Married": m -= 0.10
-    
-    if str(employment_status).strip().title() == "Unemployed": m += 0.20
-    if str(vehicle_usage).strip().title() == "Commercial": m += 0.30
-
-    if density is not None: m += density_tpl_delta(density)
-    else: m += 0.35 if urban_rural == "Urban" else -0.35
-
-    if prior_claims == 1: m += 0.20
-    elif prior_claims == 2: m += 0.40
-    elif prior_claims >= 3: m += 0.60
-    
-    if age < 25: m += 0.30
-    elif age > 65: m += 0.15
-    
-    if years_driving < 3: m += 0.35
-    elif years_driving < 8: m += 0.15
-    elif years_driving > 15: m -= 0.20
-    
-    m += 0.20 * violations
-    if mileage > 30000: m += 0.15
-    if credit_score < 550: m += 0.15
-    
-    return max(0.30, min(m, 3.00))
-
-def calculate_tpl_frequency_multiplier_vector(df):
-    m = pd.Series(1.0, index=df.index)
-    
-    m -= np.where(df["gender"].astype(str).str.strip().str.title() == "Female", 0.10, 0.0)
-    m += np.where(df["marital_status"].astype(str).str.strip().str.title() == "Single", 0.20,
-         np.where(df["marital_status"].astype(str).str.strip().str.title().isin(["Divorced", "Widowed"]), 0.10,
-         np.where(df["marital_status"].astype(str).str.strip().str.title() == "Married", -0.10, 0.0)))
-    m += np.where(df["employment_status"].astype(str).str.strip().str.title() == "Unemployed", 0.20, 0.0)
-    m += np.where(df["vehicle_usage"].astype(str).str.strip().str.title() == "Commercial", 0.30, 0.0)
-
-    urban_fallback_tpl = np.where(df["urban_rural"] == 1, 0.35, -0.35)
-    if "population_density" in df.columns:
-        dens_delta = density_delta_vector(df["population_density"], kind="tpl")
-        dens_delta = np.where(pd.isna(dens_delta), urban_fallback_tpl, dens_delta)
-    else: dens_delta = urban_fallback_tpl
-    m += dens_delta
-
-    pc = df["prior_claims"]
-    m += np.where(pc == 1, 0.20, np.where(pc == 2, 0.40, np.where(pc >= 3, 0.60, 0.0)))
-    
-    age = df["age"]
-    m += np.where(age < 25, 0.30, np.where(age > 65, 0.15, 0.0))
-    yd = df["years_driving"]
-    m += np.where(yd < 3, 0.35, np.where(yd < 8, 0.15, np.where(yd > 15, -0.20, 0.0)))
-    
-    m += 0.20 * df["traffic_violations"]
-    m += np.where(df["annual_mileage"] > 30000, 0.15, 0.0)
-    m += np.where(df["credit_score"] < 550, 0.15, 0.0)
-    
-    return m.clip(0.30, 3.00).values
-
-# Severity Loadings
-def calculate_od_severity_loading_vector(df):
-    s = pd.Series(1.0, index=df.index)
-    is_female = df["gender"].astype(str).str.strip().str.title() == "Female"
-    s *= np.where(is_female, 0.90, 1.00)
-    vv = df["vehicle_value"]
-    s += np.where(vv > 750_000, 0.50, np.where(vv > 500_000, 0.35, np.where(vv > 300_000, 0.20, np.where(vv > 150_000, 0.10, 0.0))))
-    s += np.where(df["vehicle_type"].isin(["SUV", "Pickup"]), 0.10, 0.0)
-    va = df["vehicle_age"]
-    s -= np.where(va > 15, 0.20, np.where(va > 10, 0.10, 0.0))
-    return s.clip(lower=0.50).values
-
-def calculate_tpl_severity_loading_vector(df):
-    s = pd.Series(1.0, index=df.index)
-    is_female = df["gender"].astype(str).str.strip().str.title() == "Female"
-    s *= np.where(is_female, 0.88, 1.00)
-    s += np.where(df["urban_rural"] == 1, 0.20, -0.20)
-    s += np.where(df["vehicle_type"].isin(["SUV", "Pickup"]), 0.15, np.where(df["vehicle_type"] == "Minivan", 0.10, 0.0))
-    s += np.where(df["region"].isin(["Khomas", "Erongo"]), 0.10, 0.0)
-    return s.clip(lower=0.50).values
-
 # ---------- Card render ----------
 def render_card(horizon, cfg, prob=None):
     if prob is None:
@@ -460,7 +258,7 @@ def render_card(horizon, cfg, prob=None):
             </div>""", unsafe_allow_html=True)
         return
         
-    risk, risk_color = risk_level(prob)
+    risk, risk_color = risk_level(prob, cfg["threshold"])
     decision = "Claim Likely" if prob >= cfg["threshold"] else "No Claim"
     decision_color = "#c62828" if prob >= cfg["threshold"] else "#2e7d32"
     left_pct = min(max(prob * 100, 0), 100)
@@ -478,7 +276,11 @@ def render_card(horizon, cfg, prob=None):
             <div style="position:relative;height:20px;background:linear-gradient(to right,#4caf50,#ffc107,#f44336);border-radius:10px;">
               <div style="position:absolute;left:{left_pct:.2f}%;top:-5px;transform:translateX(-50%);width:12px;height:30px;background:#fff;border:3px solid #1a2a4a;border-radius:6px;"></div>
             </div>
-            <div style="display:flex;justify-content:space-between;font-size:11px;color:#888;margin-top:4px;"><span>0%</span><span>33%</span><span>66%</span><span>100%</span></div>
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:#888;margin-top:4px;">
+                <span>0%</span>
+                <span style="font-weight:bold;">Threshold: {cfg['threshold']:.0%}</span>
+                <span>100%</span>
+            </div>
           </div>
         </div>""", unsafe_allow_html=True)
 
@@ -518,38 +320,34 @@ def run_bulk_prediction(df, od_severity_rate, tpl_base_severity, safety_loading)
             raise FileNotFoundError(f"Model file `{cfg['file']}` not found for {h}.")
 
     out = df.copy()
-    out["od_frequency_mult"]  = calculate_od_frequency_multiplier_vector(df)
-    out["tpl_frequency_mult"] = calculate_tpl_frequency_multiplier_vector(df)
-    out["od_severity_load"]   = calculate_od_severity_loading_vector(df)
-    out["tpl_severity_load"]  = calculate_tpl_severity_loading_vector(df)
     out["crowding_band"] = out["population_density"].apply(lambda d: density_band(None if pd.isna(d) else d))
 
-    od_severity_nad  = (out["vehicle_value"].astype(float) * od_severity_rate * out["od_severity_load"])
-    tpl_severity_nad = tpl_base_severity * out["tpl_severity_load"]
     X = out[MODEL_FEATURES]
 
     for h, cfg in HORIZONS.items():
         short = cfg["short"]
-        base = models[h].predict_proba(X)[:, 1]
         
-        base = base * PROBABILITY_CALIBRATION 
-
-        # Increased caps to allow for realistic high-risk profiles
-        od_prob  = np.minimum(base * OD_CLAIM_SHARE  * out["od_frequency_mult"].values,  0.90)
-        tpl_prob = np.minimum(base * TPL_CLAIM_SHARE * out["tpl_frequency_mult"].values, 0.60)
+        # Direct model probability - NO ARTIFICIAL MULTIPLIERS
+        prob = models[h].predict_proba(X)[:, 1]
+        
+        # Split probability for reserve calculation purposes only
+        od_prob = prob * 0.70
+        tpl_prob = prob * 0.30
+        
+        od_severity_nad  = (out["vehicle_value"].astype(float) * od_severity_rate)
+        tpl_severity_nad = tpl_base_severity
         
         od_reserve  = (od_prob  * od_severity_nad  * safety_loading).round(2)
         tpl_reserve = (tpl_prob * tpl_severity_nad * safety_loading).round(2)
-        combined_prob = np.minimum(od_prob + tpl_prob, 0.95)
 
         out[f"{short}_od_prob"]      = od_prob
         out[f"{short}_od_reserve"]   = od_reserve
         out[f"{short}_tpl_prob"]     = tpl_prob
         out[f"{short}_tpl_reserve"]  = tpl_reserve
-        out[f"{short}_total_prob"]   = combined_prob
+        out[f"{short}_total_prob"]   = prob
         out[f"{short}_total_reserve"] = (od_reserve + tpl_reserve).round(2)
-        out[f"{short}_risk_level"]   = [risk_level(p)[0] for p in combined_prob]
-        out[f"{short}_decision"]     = np.where(combined_prob >= cfg["threshold"], "Claim", "No Claim")
+        out[f"{short}_risk_level"]   = [risk_level(p, cfg["threshold"])[0] for p in prob]
+        out[f"{short}_decision"]     = np.where(prob >= cfg["threshold"], "Claim", "No Claim")
 
     out["total_reserve"] = out["12M_total_reserve"].round(2)
     return out
@@ -603,7 +401,6 @@ town = st.sidebar.selectbox("Town", TOWNS_BY_REGION[region])
 urban_rural = st.sidebar.selectbox("Urban/Rural", ["Urban", "Rural"])
 
 st.sidebar.divider(); st.sidebar.header("Vehicle")
-# Updated Vehicle value limit to 5,000,000
 vehicle_value = st.sidebar.number_input("Vehicle Value (NAD)", 20_000, 5_000_000, 250_000, step=50_000)
 vehicle_age = st.sidebar.slider("Vehicle Age (yrs)", 0, 25, 5)
 vehicle_age_group = st.sidebar.selectbox("Vehicle Age Group", ["New", "Recent", "Old"])
@@ -673,36 +470,16 @@ with tab_single:
     predict_clicked = st.button("Predict Claim Risk", type="primary", use_container_width=True)
 
     if predict_clicked:
-        od_freq = calculate_od_frequency_multiplier(
-            age=age, gender=gender, years_driving=years_driving, prior_claims=prior_claims, 
-            violations=traffic_violations, mileage=annual_mileage, credit_score=credit_score, 
-            urban_rural=urban_rural, vehicle_age=vehicle_age, safety_features=1 if safety_features == "Yes" else 0,
-            marital_status=marital_status, employment_status=employment_status, income_level=income_level,
-            vehicle_usage=vehicle_usage, bonus_malus=bonus_malus, density=None
-        )
-        
-        tpl_freq = calculate_tpl_frequency_multiplier(
-            age=age, gender=gender, years_driving=years_driving, prior_claims=prior_claims, 
-            violations=traffic_violations, mileage=annual_mileage, credit_score=credit_score, 
-            urban_rural=urban_rural, marital_status=marital_status, employment_status=employment_status,
-            vehicle_usage=vehicle_usage, density=None
-        )
-
         new = {}
         for h, cfg in HORIZONS.items():
             if MODELS.get(h) is None: continue
             try:
-                base = float(MODELS[h].predict_proba(input_df[MODEL_FEATURES])[0, 1])
+                # Direct prediction from the model
+                prob = float(MODELS[h].predict_proba(input_df[MODEL_FEATURES])[0, 1])
+                decision = "Claim" if prob >= cfg["threshold"] else "No Claim"
                 
-                base = base * PROBABILITY_CALIBRATION
-
-                od_prob  = min(base * OD_CLAIM_SHARE  * od_freq,  0.90)
-                tpl_prob = min(base * TPL_CLAIM_SHARE * tpl_freq, 0.60)
-                combined = min(od_prob + tpl_prob, 0.95)
-
-                new[h] = {"od_prob": od_prob, "tpl_prob": tpl_prob, "combined": combined}
-                decision = "Claim" if combined >= cfg["threshold"] else "No Claim"
-                log_prediction(age, gender, vehicle_value, premium_amount, h, decision, combined)
+                new[h] = {"prob": prob, "decision": decision}
+                log_prediction(age, gender, vehicle_value, premium_amount, h, decision, prob)
             except Exception as e:
                 st.warning(f"Prediction failed for `{h}`: {e}")
 
@@ -713,9 +490,9 @@ with tab_single:
     results = st.session_state["last_results"]
     st.markdown("### Predicted Claim Likelihood")
     c1, c2, c3 = st.columns(3)
-    with c1: render_card("3 months",  HORIZONS["3 months"],  results.get("3 months",  {}).get("combined"))
-    with c2: render_card("6 months",  HORIZONS["6 months"],  results.get("6 months",  {}).get("combined"))
-    with c3: render_card("12 months", HORIZONS["12 months"], results.get("12 months", {}).get("combined"))
+    with c1: render_card("3 months",  HORIZONS["3 months"],  results.get("3 months",  {}).get("prob"))
+    with c2: render_card("6 months",  HORIZONS["6 months"],  results.get("6 months",  {}).get("prob"))
+    with c3: render_card("12 months", HORIZONS["12 months"], results.get("12 months", {}).get("prob"))
 
 # ============================================================
 # TAB 2 - Bulk
