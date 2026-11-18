@@ -228,12 +228,14 @@ def warm_models():
 MODELS = warm_models()
 
 # ---------- Helpers ----------
-def risk_level(prob, threshold):
-    if prob < threshold:
-        return "Low", "#2e7d32"
-    if prob < 2 * threshold:
-        return "Moderate", "#f9a825"
-    return "High", "#c62828"
+def risk_level(prob):
+    # Fixed visual bands to ensure clear categorisation across all horizons
+    if prob < 0.15:
+        return "Low", "#2e7d32"    # Green
+    elif prob < 0.30:
+        return "Moderate", "#f9a825" # Yellow
+    else:
+        return "High", "#c62828"   # Red
 
 def compute_population_density(area_km2, population):
     try:
@@ -462,12 +464,12 @@ def render_card(horizon, cfg, prob=None):
               <div style="font-size:13px;color:#94a3b8;">Click <b>Predict Claim Risk</b> to generate</div>
             </div>""", unsafe_allow_html=True)
         return
-    risk, risk_color = risk_level(prob, cfg["threshold"])
+        
+    risk, risk_color = risk_level(prob)
     decision = "Claim Likely" if prob >= cfg["threshold"] else "No Claim"
     decision_color = "#c62828" if prob >= cfg["threshold"] else "#2e7d32"
     left_pct = min(max(prob * 100, 0), 100)
     
-    # Changed color:{cfg['color']} to a fixed color (#1a2a4a) for consistency
     st.markdown(f"""
         <div style="background:#fff;border:1px solid #e0e6ef;border-radius:14px;padding:24px 20px;text-align:center;box-shadow:0 3px 12px rgba(0,0,0,.06);">
           <div style="font-size:15px;color:#4a5568;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;">Within {horizon}</div>
@@ -551,7 +553,7 @@ def run_bulk_prediction(df, od_severity_rate, tpl_base_severity, safety_loading)
         out[f"{short}_tpl_reserve"]  = tpl_reserve
         out[f"{short}_total_prob"]   = combined_prob
         out[f"{short}_total_reserve"] = (od_reserve + tpl_reserve).round(2)
-        out[f"{short}_risk_level"]   = [risk_level(p, cfg["threshold"])[0] for p in combined_prob]
+        out[f"{short}_risk_level"]   = [risk_level(p)[0] for p in combined_prob]
         out[f"{short}_decision"]     = np.where(combined_prob >= cfg["threshold"], "Claim", "No Claim")
 
     out["total_reserve"] = out["12M_total_reserve"].round(2)
