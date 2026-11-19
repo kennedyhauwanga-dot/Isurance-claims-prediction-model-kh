@@ -519,17 +519,6 @@ tab_single, tab_bulk = st.tabs(["Single Policyholder", "Bulk Policy File"])
 # TAB 1 - Single
 # ============================================================
 with tab_single:
-    st.subheader("Generate Prediction")
-    
-    with st.expander("ℹ️ How Risk is Calculated", expanded=False):
-        st.markdown("""
-        The prediction combines the **XGBoost Machine Learning model** with standard **Insurance Underwriting Rules**:
-        * **Marital Status:** Married reduces risk (-15%), Single increases risk (+15%)
-        * **Gender:** Male increases risk (+10%), Female reduces risk (-10%)
-        * **Location:** Urban increases risk (+10%), Rural reduces risk (-10%)
-        * **Age:** Under 25 increases risk (+15%), Over 60 reduces risk (-10%)
-        """)
-
     predict_clicked = st.button("Predict Claim Risk", type="primary", use_container_width=True)
 
     if predict_clicked:
