@@ -586,7 +586,7 @@ with tab_bulk:
         "traffic_violations": 0, "credit_score": 650, "annual_mileage": 20000, "has_telematics": "Yes", "telematics_score": 50,
     }])
     
-    with st.expander("📄 Download reference template (all columns)"):
+    with st.expander(" Download reference template (all columns)"):
         st.dataframe(template_df, use_container_width=True, hide_index=True)
         st.download_button("Download template (CSV)", data=template_df.to_csv(index=False).encode("utf-8"), file_name="bulk_policy_template.csv", mime="text/csv")
         st.download_button("Download template (Excel)", data=convert_df_to_excel(template_df, "Template"), file_name="bulk_policy_template.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -684,7 +684,7 @@ with tab_bulk:
         })
         st.dataframe(view, use_container_width=True, hide_index=True)
 
-        st.markdown("#### ⬇ Downloads")
+        st.markdown("#### Downloads")
         dc1, dc2 = st.columns(2)
         with dc1: st.download_button("Download full results (Excel)", data=convert_df_to_excel(enriched, "Bulk_Predictions"), file_name=f"bulk_predictions_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary", use_container_width=True)
         with dc2: st.download_button("Download full results (CSV)", data=enriched.to_csv(index=False).encode("utf-8"), file_name=f"bulk_predictions_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime="text/csv", use_container_width=True)
