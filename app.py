@@ -374,16 +374,23 @@ def run_bulk_prediction(df, od_severity_rate, tpl_base_severity, safety_loading)
     out["crowding_band"] = out["population_density"].apply(lambda d: density_band(None if pd.isna(d) else d))
     X = out[MODEL_FEATURES]
 
+    # 1. Calculate raw probabilities for all horizons
+    raw_probs = {}
+    for h, cfg in HORIZONS.items():
+        base_prob = models[h].predict_proba(X)[:, 1]
+        raw_probs[h] = apply_domain_rules_vector(base_prob, out)
+
+    # 2. Enforce monotonicity (Cumulative risk: P(3M) <= P(6M) <= P(12M))
+    if "3 months" in raw_probs and "6 months" in raw_probs:
+        raw_probs["6 months"] = np.maximum(raw_probs["6 months"], raw_probs["3 months"])
+    if "6 months" in raw_probs and "12 months" in raw_probs:
+        raw_probs["12 months"] = np.maximum(raw_probs["12 months"], raw_probs["6 months"])
+
+    # 3. Calculate reserves and assign final probabilities
     for h, cfg in HORIZONS.items():
         short = cfg["short"]
+        prob = raw_probs[h]
         
-        # 1. Base model prediction
-        base_prob = models[h].predict_proba(X)[:, 1]
-        
-        # 2. Apply Domain Rules (Married, Male, Urban, Young, etc.)
-        prob = apply_domain_rules_vector(base_prob, out)
-        
-        # 3. Split for reserve calculation purposes
         od_prob = prob * 0.70
         tpl_prob = prob * 0.30
         
@@ -523,21 +530,31 @@ with tab_single:
 
     if predict_clicked:
         new = {}
+        raw_probs = {}
+        
+        # 1. Calculate raw probabilities
         for h, cfg in HORIZONS.items():
             if MODELS.get(h) is None: continue
             try:
-                # 1. Base prediction
                 base_prob = float(MODELS[h].predict_proba(input_df[MODEL_FEATURES])[0, 1])
-                
-                # 2. Apply domain rules
                 prob = apply_domain_rules(base_prob, age, gender, marital_status, 1 if urban_rural == "Urban" else 0)
-                
-                decision = "Claim" if prob >= cfg["threshold"] else "No Claim"
-                
-                new[h] = {"prob": prob, "decision": decision}
-                log_prediction(age, gender, vehicle_value, premium_amount, h, decision, prob)
+                raw_probs[h] = prob
             except Exception as e:
                 st.warning(f"Prediction failed for `{h}`: {e}")
+
+        # 2. Enforce monotonicity (Cumulative risk: P(3M) <= P(6M) <= P(12M))
+        if "3 months" in raw_probs and "6 months" in raw_probs:
+            raw_probs["6 months"] = max(raw_probs["6 months"], raw_probs["3 months"])
+        if "6 months" in raw_probs and "12 months" in raw_probs:
+            raw_probs["12 months"] = max(raw_probs["12 months"], raw_probs["6 months"])
+
+        # 3. Finalize decisions and log
+        for h, cfg in HORIZONS.items():
+            if h in raw_probs:
+                prob = raw_probs[h]
+                decision = "Claim" if prob >= cfg["threshold"] else "No Claim"
+                new[h] = {"prob": prob, "decision": decision}
+                log_prediction(age, gender, vehicle_value, premium_amount, h, decision, prob)
 
         if new:
             st.session_state["last_results"] = new
