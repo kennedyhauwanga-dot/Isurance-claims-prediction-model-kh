@@ -28,7 +28,7 @@ if not hasattr(SimpleImputer, '_fill_dtype'):
     SimpleImputer._fill_dtype = property(lambda self: np.dtype('float64'))
 # ============================================================
 
-st.set_page_config(page_title="Insurance Claim Risk Profiling", layout="wide")
+st.set_page_config(page_title="Insurance Claim Risk Prediction", layout="wide")
 
 # ---------- Model configuration ----------
 # Thresholds aligned exactly with the optimal F1 thresholds from your Jupyter Notebook
